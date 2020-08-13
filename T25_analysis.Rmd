@@ -20,6 +20,9 @@ setff("FigFolder", file.path(Sys.getenv("DiezmannLab"), "T25", "Figures"))
 ```
 
 # Fig 5b: Biofilm cell viability
+- Plotted fluorescence per strain, with mean and standard error
+- I also fit a linear linear model of fluorescence by strain, using Mal2-Hsp90 as the reference
+- 530E had significantly less fluorescence than Mal2-Hsp90. WT was not signifincatly different. All other strains had significantly higher fluorecence
 ```{r cell_viability}
 Data3 <- read_pzfx(ffDataFolder("CalbicansMutantsCV_REZ.pzfx"),
                    table='Data 3') %>% 
@@ -41,6 +44,9 @@ lm(fluorescence ~ strain, data=mutate(Data3, strain=relevel(strain, ref='1384'))
 ```
 
 # Fig 5c: Metabolic biomass
+- Plotted OD570 per strain, with mean and standard error
+- I also fit a linear linear model of OD570 by strain, using Mal2-Hsp90 as the reference
+- WT and S530A had significantly higher OD570 than Mal2-Hsp90. All other strains were not significantly different
 ```{r}
 Data1 <- read_pzfx(ffDataFolder("CalbicansMutantsCV_REZ.pzfx"), table='Data 1') %>%
   gather(strain, OD570) %>%
@@ -61,7 +67,10 @@ lm(OD570 ~ strain, data=mutate(Data1, strain=relevel(strain, ref='1384'))) %>% s
 ```
 
 # Fig S2: Yeast to hyphae transition
-
+- Plotted morphology index for each strain when grown on maltose and dextrose
+- I also ran Mann-Whitney tests on maltose vs dextrose for each strain
+- Morphology index higher in dextrose for T25A, T25E and S530E
+- HIgher in maltose for Mal2-Hsp90 and no difference for WT and S530A
 ```{r}
 morph_index <- read_delim(ffDataFolder("/morph_index.txt"),
 "\t", escape_double = FALSE, trim_ws = TRUE)
@@ -122,6 +131,8 @@ wilcox.test(filter(morph_index, genotype=='S530E' & Medium=='dextrose') %>% `$`(
 ```
 
 # Tbl S6: Manduca survival
+- Significant differences in the number of surviving manduca on day 1 by fisher's exact test
+- Relative to manduca infected with MAL2-HSP90, manduca infected with 530E and with mock infection (PBS) had significantly higher survival
 ```{r survival}
 manduca_survival <- read_tsv(ffDataFolder("manduca_survival.txt")) %>%
   rename(Strain=Treatment) %>%
@@ -155,48 +166,6 @@ run_fisher_test <- function(strain, df) {
 
 strain_names$pval <- map_dbl(strain_names$strain, possibly(run_fisher_test, NA), manduca_survival)
 strain_names
-```
-
-
-```{r Weight_25_30_37}
-
-weight_25_versus_30C <- read_tsv(ffDataFolder("manduca_weight.txt")) %>%
-    rename(Strain=Treatment) %>%
-  mutate(Strain=factor(Strain, levels=c('PBS', 'YSD89', 'YSD1384', 'YSD1403', 'YSD1410', 'YSD1442', 'YSD1444')))
-
-
-
-(weight_25_versus_30C_plot <- weight_25_versus_30C %>% gather('Day', 'weight', starts_with('Day')) %>% 
-  mutate(Day=case_when(Day=='Day1_PM' ~ 0,
-                       Day=='Day2_AM' ~ .667,
-                       Day=='Day2_PM' ~ 1,
-                       Day=='Day3_AM' ~ 1.667)) %>% 
-  ggplot(aes(x=Day, y=weight, colour=Strain, group=Pot)) +
-  geom_line() +
-  facet_grid(~ Strain) +
-  ylab("Weight") +
-  xlab("Day") +
-  scale_y_continuous(limits=c(0,8)) +
-  scale_x_continuous(breaks=c(0,1,2), limits=c(0,2),
-                     expand=expand_scale(mult = 0, add = .25)) +
-  scale_colour_manual(values=c(calc_pal()(12)[1:4],calc_pal()(12)[5:7])) +
-  my_theme)
-
-
-
-ggsave(ffFigFolder("weight.pdf"), plot=weight_25_versus_30C_plot, height=4, width=8, units="in")
-
-#There's not enough growth by Day2_AM to see differences (YSD1444 is sig lower than PBS, but everything else is non-sig)
-weight_25_versus_30C %>%
-  ggplot(aes(x=Strain, y=Day2_AM, colour=Strain))+geom_jitter(width=.25)
-
-lm(Day2_AM ~ Strain, data=weight_25_versus_30C) %>% summary
-
-# By day2 PM enough have died that all differences are non-sig
-weight_25_versus_30C %>%
-  ggplot(aes(x=Strain, y=Day2_PM, colour=Strain))+geom_jitter(width=.25)
-
-lm(Day2_PM ~ Strain, data=weight_25_versus_30C) %>% summary()
 ```
 
 
