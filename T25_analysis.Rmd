@@ -1,0 +1,203 @@
+---
+title: "Characterization of a novel Hsp90 phosphoswitch"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+library(tidyverse)
+library(folderfun)
+library(pzfx)
+library(ggthemes)
+
+
+setff("DataFolder", file.path(Sys.getenv("DiezmannLab"), "T25", "data_files"))
+setff("FigFolder", file.path(Sys.getenv("DiezmannLab"), "T25", "Figures"))
+```
+
+# Fig 5b: Biofilm cell viability
+```{r cell_viability}
+Data3 <- read_pzfx(ffDataFolder("CalbicansMutantsCV_REZ.pzfx"),
+                   table='Data 3') %>% 
+  gather(strain, fluorescence) %>%
+    mutate(strain=factor(strain, 
+                         levels=c('89', '1384', '1403', '1410', 
+                                  '1442', '1444')))
+
+(bf_fluorescence <- Data3 %>% ggplot(aes(x=strain, y=fluorescence)) +
+    geom_jitter(width=.2, alpha=.3) +
+    stat_summary(fun.data = mean_se, geom = "errorbar", width=.2) +
+    stat_summary(fun.y = mean, geom = "point", size=2, colour='red') +
+    theme_bw()
+  )
+
+ggsave(ffFigFolder("bf_fluorescence.pdf"), bf_fluorescence)
+
+lm(fluorescence ~ strain, data=mutate(Data3, strain=relevel(strain, ref='1384'))) %>% summary()
+```
+
+# Fig 5c: Metabolic biomass
+```{r}
+Data1 <- read_pzfx(ffDataFolder("CalbicansMutantsCV_REZ.pzfx"), table='Data 1') %>%
+  gather(strain, OD570) %>%
+  mutate(strain=factor(strain, 
+                       levels=c('89', '1384', '1403',
+                                '1410', '1442', '1444')))
+
+(bf_OD570 <- Data1 %>%
+  ggplot(aes(x=strain, y=OD570)) +
+    geom_jitter(width=.2, alpha=.3) +
+    stat_summary(fun.data = mean_se, geom = "errorbar", width=.2) +
+    stat_summary(fun.y = mean, geom = "point", size=2, colour='red') +
+    theme_bw()
+  )
+ggsave(ffFigFolder("bf_OD570.pdf"), bf_OD570)
+
+lm(OD570 ~ strain, data=mutate(Data1, strain=relevel(strain, ref='1384'))) %>% summary()
+```
+
+# Fig S2: Yeast to hyphae transition
+
+```{r}
+morph_index <- read_delim(ffDataFolder("/morph_index.txt"),
+"\t", escape_double = FALSE, trim_ws = TRUE)
+
+genotypes=data.frame(YSD=c("89", "1384", "1403", "1410", "1442", 
+                           "1444", "557", "622", "628", "634"), 
+                     genotype=factor(c("WT", "Mal2-Hsp90", "T25A", "T25E", "S530A", 
+                                       "S530E", "cka1∆/∆", "cka2∆/∆", "ckb1∆/∆", "ckb2∆/∆"),
+                                     levels=c("WT", "Mal2-Hsp90", "T25A", "T25E", "S530A",
+                                              "S530E", "cka1∆/∆", "cka2∆/∆", "ckb1∆/∆", "ckb2∆/∆")))
+
+morph_index <- morph_index %>% 
+  mutate(YSD=as.character(YSD)) %>% 
+  full_join(genotypes) 
+
+morph_index %>% 
+  filter(!genotype %in% c("cka1∆/∆", "cka2∆/∆", "ckb1∆/∆", "ckb2∆/∆")) %>%
+  ggplot(aes(x=Medium, y=MI, color=Medium)) +
+    facet_grid(.~genotype) +
+    theme_bw() +
+    theme(axis.text.x = element_blank(),
+          axis.title.x = element_blank(),
+          legend.position = "bottom",
+          strip.text=element_text(size=7)) +
+    geom_jitter(size = .5) +
+    scale_y_log10() +
+    scale_color_manual(values=c(calc_pal()(12)[2],
+                                calc_pal()(12)[1]))
+
+ggsave(ffFigFolder("morphology.pdf"), bg="transparent")
+
+# MI is not normally distributed so we use Man-Whitney U instead to t-test to compare two samples (maltose v. dextrose)
+# non-parametric ANOVA is hard, so we are not comparing WT vs. mutants for each condition.
+
+wilcox.test(filter(morph_index, genotype=='WT' & Medium=='dextrose') %>% `$`(MI),
+            filter(morph_index, genotype=='WT' & Medium=='maltose') %>% `$`(MI))
+
+
+wilcox.test(filter(morph_index, genotype=='Mal2-Hsp90' & Medium=='dextrose') %>% `$`(MI),
+            filter(morph_index, genotype=='Mal2-Hsp90' & Medium=='maltose') %>% `$`(MI))
+
+
+wilcox.test(filter(morph_index, genotype=='T25A' & Medium=='dextrose') %>% `$`(MI),
+            filter(morph_index, genotype=='T25A' & Medium=='maltose') %>% `$`(MI))
+
+
+wilcox.test(filter(morph_index, genotype=='T25E' & Medium=='dextrose') %>% `$`(MI),
+            filter(morph_index, genotype=='T25E' & Medium=='maltose') %>% `$`(MI))
+
+
+wilcox.test(filter(morph_index, genotype=='S530A' & Medium=='dextrose') %>% `$`(MI),
+            filter(morph_index, genotype=='S530A' & Medium=='maltose') %>% `$`(MI))
+
+
+wilcox.test(filter(morph_index, genotype=='S530E' & Medium=='dextrose') %>% `$`(MI),
+            filter(morph_index, genotype=='S530E' & Medium=='maltose') %>% `$`(MI))
+
+```
+
+# Tbl S6: Manduca survival
+```{r survival}
+manduca_survival <- read_tsv(ffDataFolder("manduca_survival.txt")) %>%
+  rename(Strain=Treatment) %>%
+  mutate(Strain=factor(Strain, levels=c('PBS', 'YSD89', 'YSD1384', 'YSD1403', 'YSD1410', 'YSD1442', 'YSD1444')))
+
+manduca_survival %>% 
+  select(Strain, Day2_AM) %>%
+  mutate(Strain=as.character(Strain)) %>%
+  table() %>%
+  fisher.test()
+
+strain_names <- tribble(~strain, ~genotype,
+                        "PBS",     "PBS",
+                        "YSD89",   "WT",
+                        "YSD1384", "MAL2-HSP90",
+                        "YSD1403", "T25A",
+                        "YSD1442", "T25E",
+                        "YSD1442", "S530A",
+                        "YSD1444", "530E")
+strain <- "YSD1403" 
+
+run_fisher_test <- function(strain, df) {
+  df %>% 
+  select(Strain, Day2_AM) %>%
+  mutate(Strain=as.character(Strain)) %>%
+  filter(Strain %in% c("YSD1384", strain)) %>%
+  table() %>%
+  fisher.test() %>% 
+  `$`(p.value) 
+}
+
+strain_names$pval <- map_dbl(strain_names$strain, possibly(run_fisher_test, NA), manduca_survival)
+strain_names
+```
+
+
+```{r Weight_25_30_37}
+
+weight_25_versus_30C <- read_tsv(ffDataFolder("manduca_weight.txt")) %>%
+    rename(Strain=Treatment) %>%
+  mutate(Strain=factor(Strain, levels=c('PBS', 'YSD89', 'YSD1384', 'YSD1403', 'YSD1410', 'YSD1442', 'YSD1444')))
+
+
+
+(weight_25_versus_30C_plot <- weight_25_versus_30C %>% gather('Day', 'weight', starts_with('Day')) %>% 
+  mutate(Day=case_when(Day=='Day1_PM' ~ 0,
+                       Day=='Day2_AM' ~ .667,
+                       Day=='Day2_PM' ~ 1,
+                       Day=='Day3_AM' ~ 1.667)) %>% 
+  ggplot(aes(x=Day, y=weight, colour=Strain, group=Pot)) +
+  geom_line() +
+  facet_grid(~ Strain) +
+  ylab("Weight") +
+  xlab("Day") +
+  scale_y_continuous(limits=c(0,8)) +
+  scale_x_continuous(breaks=c(0,1,2), limits=c(0,2),
+                     expand=expand_scale(mult = 0, add = .25)) +
+  scale_colour_manual(values=c(calc_pal()(12)[1:4],calc_pal()(12)[5:7])) +
+  my_theme)
+
+
+
+ggsave(ffFigFolder("weight.pdf"), plot=weight_25_versus_30C_plot, height=4, width=8, units="in")
+
+#There's not enough growth by Day2_AM to see differences (YSD1444 is sig lower than PBS, but everything else is non-sig)
+weight_25_versus_30C %>%
+  ggplot(aes(x=Strain, y=Day2_AM, colour=Strain))+geom_jitter(width=.25)
+
+lm(Day2_AM ~ Strain, data=weight_25_versus_30C) %>% summary
+
+# By day2 PM enough have died that all differences are non-sig
+weight_25_versus_30C %>%
+  ggplot(aes(x=Strain, y=Day2_PM, colour=Strain))+geom_jitter(width=.25)
+
+lm(Day2_PM ~ Strain, data=weight_25_versus_30C) %>% summary()
+```
+
+
+
