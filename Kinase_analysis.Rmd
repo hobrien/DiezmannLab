@@ -1,0 +1,233 @@
+---
+title: "Kinases"
+output: html_notebook
+---
+
+
+```{r setup}
+library(tidyverse)
+library(folderfun)
+library(readxl)
+library(ggtext)
+library(survival)
+library(ggfortify)
+library(survminer)
+
+theme_set(theme_minimal())
+
+setff("DataFolder", file.path(Sys.getenv("DiezmannLab"), "kinases", "data_files"))
+setff("FigFolder", file.path(Sys.getenv("DiezmannLab"), "kinases", "Figures"))
+dir.create(ffFigFolder(), showWarnings = FALSE)
+
+number_groups <- function(data, col) { data %>% mutate(bio_rep = group_indices_(., .dots=col)) }
+
+list_bio_reps <- function(data) {
+  data %>% nest() %>%
+  mutate(data=modify(data, number_groups, "date")) %>%
+  unnest(cols = c(data)) %>%
+  mutate(bio_rep=ifelse(genotype=='WT', NA_integer_, bio_rep))
+}
+
+get_genotypes <- function(data, metadata){
+    data %>%  filter(! genotype %in% c('orf', 'orf19')) %>%
+    mutate(genotype=tolower(genotype)) %>%
+    left_join(filter(metadata, column_name=='genotype'),
+            by=c("genotype" = "code")) %>% 
+  select(-column_name) %>%
+  rename(code=genotype, genotype=meaning) %>%
+  mutate(genotype = ifelse(genotype=='WT', genotype, glue("*{genotype}*")))
+}
+
+make_boxplot <- function(data, x, y, colour, facet_x, facet_y, xlab="", ylab="") {
+    ggplot(data, aes(x={{x}}, y={{y}})) + 
+    geom_boxplot(colour='grey50', fill='black', alpha=.1, outlier.alpha=0) +
+    geom_point(aes(colour={{colour}}), size=2, alpha=.25, stroke=0) +
+    facet_grid(rows=enquos(facet_y), cols=enquos(facet_x)) +
+    scale_colour_brewer(palette="Set1", name="Biological Rep", na.value='grey50') +
+    xlab({{xlab}}) +
+    ylab({{ylab}}) +
+    theme(strip.text.y = element_markdown(angle=0),
+          strip.text.x = element_markdown(),
+          panel.grid.major=element_line(size=.25),
+          legend.position = "bottom",
+          panel.grid.minor.x=element_blank()) +
+    guides(colour = guide_legend(override.aes = list(alpha = 1)))
+}
+
+```
+
+# antifungals
+plot as heat map
+normalise to the no gda no drug control for each strain
+```{r antifungals}
+antifungals <- read_excel(ffDataFolder("antifungals.xlsx"))
+antifungals_metadata <- read_excel(ffDataFolder("antifungals.xlsx"), sheet="code")
+
+control <- antifungals %>% filter(gda==0 & concentration==0) %>% select(-gda, -concentration, control_od = od)
+(antifungals_heatmap <- 
+antifungals %>% 
+  filter(drug == 'fluconazole') %>%
+  left_join(control) %>% 
+  mutate(normalised_od = od/control_od) %>% 
+  left_join(filter(antifungals_metadata, column_name=='genotype'),
+            by=c("genotype" = "code")) %>% 
+  select(-column_name) %>%
+  rename(code=genotype, genotype=meaning) %>%
+  mutate(concentration=round(concentration, 4),
+         gda=glue("{gda} µg/ml GDA"),
+         genotype = ifelse(genotype=='WT', genotype, glue("*{genotype}*"))) %>%
+  ggplot(aes(x=as.factor(concentration), 
+             y=genotype, 
+             fill=normalised_od)) +
+    geom_tile() +
+    facet_grid(gda ~ date, scales="free") +
+    scale_fill_viridis_c(name="Normalised OD", option="inferno") +
+    xlab("Concentration (µg/ml)") +
+    theme(axis.text.x=element_text(angle=90, hjust=1, vjust=.5),
+          axis.text.y=element_markdown(),
+          axis.title.y=element_blank())) 
+
+ggsave(ffFigFolder("antifungals_heatmap.png"), antifungals_heatmap)
+```
+# bf_biomass
+plot as scatter with mean and deviation
+
+```{r bf_biomass}
+bf_biomass <- read_excel(ffDataFolder("bf_biomass.xlsx"))
+bf_biomass_metadata <- read_excel(ffDataFolder("bf_biomass.xlsx"), sheet="code")
+
+(bf_biomass_plot <-
+  bf_biomass %>% 
+  get_genotypes(bf_biomass_metadata) %>% 
+  make_boxplot(x=mass, y=as.factor(gda), colour=NULL, NULL, genotype, xlab="mass", ylab="GDA (µg/ml)"))
+
+  ggplot(aes(x=mass, y=as.factor(gda))) + 
+    geom_boxplot(colour='grey', fill='black', alpha=.1, outlier.alpha=0) +
+    geom_point(size=1, alpha=.25) +
+    facet_grid(genotype ~ .) +
+    theme(strip.text.y = element_markdown(angle=0),
+          panel.grid.major=element_line(size=.25)) +
+    ylab("GDA (µg/ml)"))
+
+ggsave(ffFigFolder("bf_biomass.png"), bf_biomass_plot)
+```
+
+# colony morphology
+sectored pie charts for different replicates
+
+```{r colony_morphology}
+colony_morphology <- read_excel(ffDataFolder("colony_morphology.xlsx"))
+colony_morphology_metadata <- read_excel(ffDataFolder("colony_morphology.xlsx"), sheet="code")
+
+(colony_morphology_plot <-
+colony_morphology %>% 
+  get_genotypes(colony_morphology_metadata) %>% 
+  gather("rep", "score", starts_with("R")) %>%
+  ggplot(aes(x="", y="", fill=factor(score))) +
+    geom_col() +
+    coord_polar("y") +
+    scale_fill_viridis_d(name="Morphology score") +
+    facet_grid(genotype ~ media) +
+    theme(strip.text.y =element_markdown(angle=0),
+          strip.text.x =element_text(angle=60),
+          axis.title = element_blank(),
+          panel.grid.major=element_blank()))
+
+
+ggsave(ffFigFolder("colony_morphology.png"), colony_morphology_plot)
+```
+# heat shock
+5 technical replicates (r1-r5) and three. Biological replicates
+plot as scatter with mean and deviation
+```{r heat_shock}
+heat_shock <- read_excel(ffDataFolder("heat_shock.xlsx"))
+heat_shock_metadata <- read_excel(ffDataFolder("heat_shock.xlsx"), sheet="code")
+
+(heat_shock_plot <-
+heat_shock %>% 
+  get_genotypes(heat_shock_metadata) %>% 
+  mutate(temperature=glue("{temperature}ºC")) %>%  
+  gather("rep", "cfu", starts_with("r")) %>% 
+  group_by(genotype, gda, temperature) %>% 
+  list_bio_reps() %>%
+  make_boxplot(x=cfu, y=as.factor(gda), colour=factor(bio_rep), temperature, genotype, xlab="CFU", ylab="GDA (µg/ml)") +
+    scale_x_continuous(breaks = c(25,50,100,200,400,800)) +
+    coord_trans('log10')
+)
+  
+ggsave(ffFigFolder("heat_shock.png"), heat_shock_plot, height=6)
+```
+
+# oxidative stress
+plot as scatter with mean and deviation
+here distinguish between treated with and without H2O2
+
+```{r oxidative_stress}
+oxidative_stress <- read_excel(ffDataFolder("oxidative_stress.xlsx"))
+oxidative_stress_metadata <- read_excel(ffDataFolder("oxidative_stress.xlsx"), sheet="code")
+
+
+(oxidative_stress_plot <-
+oxidative_stress %>% 
+  get_genotypes(oxidative_stress_metadata) %>%
+  mutate(h2o2 = glue("{h2o2} mM H<sub>2</sub>O<sub>2</sub>")) %>%  
+  gather("rep", "cfu", starts_with("r")) %>%
+  group_by(genotype, gda, h2o2) %>% 
+  list_bio_reps() %>%
+  mutate(bio_rep=ifelse(genotype=='WT', NA_integer_, bio_rep)) %>%
+  make_boxplot(x=cfu, y=as.factor(gda), colour=factor(bio_rep), h2o2, genotype, xlab="CFU", ylab="GDA (µg/ml)")) +
+    scale_x_continuous(breaks = c(25,50,100,200,400,800)) +
+    coord_trans('log10')
+
+
+
+ggsave(ffFigFolder("oxidative_stress.png"), oxidative_stress_plot, height=6)
+```
+
+# Manduca assays
+survival curves, grouped by kinase group and compared to wild type
+
+```{r oxidative_stress}
+manduca_metadata <- read_excel(ffDataFolder("manduca_07march17.xlsx"), sheet="code")
+manduca_survival <- list.files(path = ffDataFolder(), pattern = "^manduca_.*.xlsx") %>% 
+  ffDataFolder() %>% 
+  lapply(read_excel) %>%
+  bind_rows() %>% 
+  left_join(tibble(group=c(rep('ck2 complex', 4), 
+                                rep('fungal-specific', 4), 
+                                rep('conserved', 4)), 
+                        treatment=c('cka1', 'cka2', 'ckb1', 'ckb2',
+                                    'fun31', 'thi20', 'rim15', 'rim11',
+                                    'hog1', 'mkk2', 'pkc1', 'pbs2')))
+
+make_surv_plot <- function(data_t) {
+ fit1 <- survfit(Surv(data_t$futime, data_t$fustat) ~ treatment, data=data_t) 
+ labels <- str_remove(names(fit1$strata), 'treatment=')
+ ggsurvplot(fit1, legend='bottom',
+            legend.labs=labels, censor=FALSE)$plot + theme(legend.title=element_blank())
+}
+
+data_t <- manduca_survival %>% 
+  select(-weight) %>% 
+  pivot_wider(names_from=hours_pi, values_from=alive) %>% 
+  mutate(futime=as.integer(case_when(`24` == 0 ~ 0,
+                                     `48` == 0 ~ 1,
+                                     `72` == 0 ~ 2,
+                                      TRUE ~ 3)),
+         fustat=as.integer(ifelse(is.na(`72`) | `72`==0, 1, 0)))
+
+(conserved_plot <- data_t %>% filter(group == 'conserved' | treatment == 'wt' | treatment =='pbs') %>% 
+  make_surv_plot() + scale_colour_brewer(palette = "Set1"))
+
+ggsave(ffFigFolder("conserved_survival.png"), conserved_plot)
+
+(fungal_specific_plot <- data_t %>% filter(group == 'fungal-specific' | treatment == 'wt' | treatment =='pbs') %>% 
+  make_surv_plot() + scale_colour_brewer(palette = "Set1"))
+
+ggsave(ffFigFolder("fungal_specific_survival.png"), fungal_specific_plot)
+
+(ck2_plot <- data_t %>% filter(group == 'ck2 complex' | treatment == 'wt' | treatment =='pbs') %>% 
+  make_surv_plot() + scale_colour_brewer(palette = "Set1"))
+
+ggsave(ffFigFolder("ck2_survival.png"), ck2_plot)
+```
