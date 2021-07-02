@@ -1,5 +1,5 @@
 ---
-title: "Characterization of a novel Hsp90 phosphoswitch"
+title: "Hsp90 Phosphorylation Blocks Fungal Virulence"
 output: html_notebook
 ---
 
@@ -43,30 +43,7 @@ ggsave(ffFigFolder("bf_fluorescence.pdf"), bf_fluorescence)
 lm(fluorescence ~ strain, data=mutate(Data3, strain=relevel(strain, ref='1384'))) %>% summary()
 ```
 
-# Fig 5c: Metabolic biomass
-- Plotted OD570 per strain, with mean and standard error
-- I also fit a linear linear model of OD570 by strain, using Mal2-Hsp90 as the reference
-- WT and S530A had significantly higher OD570 than Mal2-Hsp90. All other strains were not significantly different
-```{r}
-Data1 <- read_pzfx(ffDataFolder("CalbicansMutantsCV_REZ.pzfx"), table='Data 1') %>%
-  gather(strain, OD570) %>%
-  mutate(strain=factor(strain, 
-                       levels=c('89', '1384', '1403',
-                                '1410', '1442', '1444')))
-
-(bf_OD570 <- Data1 %>%
-  ggplot(aes(x=strain, y=OD570)) +
-    geom_jitter(width=.2, alpha=.3) +
-    stat_summary(fun.data = mean_se, geom = "errorbar", width=.2) +
-    stat_summary(fun.y = mean, geom = "point", size=2, colour='red') +
-    theme_bw()
-  )
-ggsave(ffFigFolder("bf_OD570.pdf"), bf_OD570)
-
-lm(OD570 ~ strain, data=mutate(Data1, strain=relevel(strain, ref='1384'))) %>% summary()
-```
-
-# Fig S2: Yeast to hyphae transition
+# Fig S3: Phosphorylation of S530 releases Hsp90’s block on the yeast-to-hyphae transition
 - Plotted morphology index for each strain when grown on maltose and dextrose
 - I also ran Mann-Whitney tests on maltose vs dextrose for each strain
 - Morphology index higher in dextrose for T25A, T25E and S530E
@@ -127,46 +104,8 @@ wilcox.test(filter(morph_index, genotype=='S530A' & Medium=='dextrose') %>% `$`(
 
 wilcox.test(filter(morph_index, genotype=='S530E' & Medium=='dextrose') %>% `$`(MI),
             filter(morph_index, genotype=='S530E' & Medium=='maltose') %>% `$`(MI))
-
 ```
 
-# Tbl S6: Manduca survival
-- Significant differences in the number of surviving manduca on day 1 by fisher's exact test
-- Relative to manduca infected with MAL2-HSP90, manduca infected with 530E and with mock infection (PBS) had significantly higher survival
-```{r survival}
-manduca_survival <- read_tsv(ffDataFolder("manduca_survival.txt")) %>%
-  rename(Strain=Treatment) %>%
-  mutate(Strain=factor(Strain, levels=c('PBS', 'YSD89', 'YSD1384', 'YSD1403', 'YSD1410', 'YSD1442', 'YSD1444')))
-
-manduca_survival %>% 
-  select(Strain, Day2_AM) %>%
-  mutate(Strain=as.character(Strain)) %>%
-  table() %>%
-  fisher.test()
-
-strain_names <- tribble(~strain, ~genotype,
-                        "PBS",     "PBS",
-                        "YSD89",   "WT",
-                        "YSD1384", "MAL2-HSP90",
-                        "YSD1403", "T25A",
-                        "YSD1442", "T25E",
-                        "YSD1442", "S530A",
-                        "YSD1444", "530E")
-strain <- "YSD1403" 
-
-run_fisher_test <- function(strain, df) {
-  df %>% 
-  select(Strain, Day2_AM) %>%
-  mutate(Strain=as.character(Strain)) %>%
-  filter(Strain %in% c("YSD1384", strain)) %>%
-  table() %>%
-  fisher.test() %>% 
-  `$`(p.value) 
-}
-
-strain_names$pval <- map_dbl(strain_names$strain, possibly(run_fisher_test, NA), manduca_survival)
-strain_names
-```
 
 
 
