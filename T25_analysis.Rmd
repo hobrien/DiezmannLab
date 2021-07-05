@@ -18,6 +18,14 @@ library(ggthemes)
 setff("DataFolder", file.path("T25", "data_files"))
 setff("FigFolder", file.path("T25", "Figures"))
 dir.create(ffFigFolder(), showWarnings = FALSE)
+
+genotypes=data.frame(YSD=c("89", "1384", "1403", "1410", "1442", 
+                           "1444", "557", "622", "628", "634"), 
+                     genotype=factor(c("WT", "Mal2-Hsp90", "T25A", "T25E", "S530A", 
+                                       "S530E", "cka1∆/∆", "cka2∆/∆", "ckb1∆/∆", "ckb2∆/∆"),
+                                     levels=c("WT", "Mal2-Hsp90", "T25A", "T25E", "S530A",
+                                              "S530E", "cka1∆/∆", "cka2∆/∆", "ckb1∆/∆", "ckb2∆/∆")))
+
 ```
 
 # Fig 5b: Biofilm cell viability
@@ -27,12 +35,10 @@ dir.create(ffFigFolder(), showWarnings = FALSE)
 ```{r cell_viability}
 Data3 <- read_pzfx(ffDataFolder("CalbicansMutantsCV_REZ.pzfx"),
                    table='Data 3') %>% 
-  gather(strain, fluorescence) %>%
-    mutate(strain=factor(strain, 
-                         levels=c('89', '1384', '1403', '1410', 
-                                  '1442', '1444')))
+  gather(strain, fluorescence) %>% 
+  left_join(genotypes, by=c("strain" = "YSD")) 
 
-(bf_fluorescence <- Data3 %>% ggplot(aes(x=strain, y=fluorescence)) +
+(bf_fluorescence <- Data3 %>% ggplot(aes(x=genotype, y=fluorescence)) +
     geom_jitter(width=.2, alpha=.3) +
     stat_summary(fun.data = mean_se, geom = "errorbar", width=.2) +
     stat_summary(fun.y = mean, geom = "point", size=2, colour='red') +
@@ -41,7 +47,7 @@ Data3 <- read_pzfx(ffDataFolder("CalbicansMutantsCV_REZ.pzfx"),
 
 ggsave(ffFigFolder("bf_fluorescence.pdf"), bf_fluorescence)
 
-lm(fluorescence ~ strain, data=mutate(Data3, strain=relevel(strain, ref='1384'))) %>% summary()
+lm(fluorescence ~ genotype, data=mutate(Data3, genotype=relevel(genotype, ref="Mal2-Hsp90"))) %>% summary()
 ```
 
 # Fig S3: Phosphorylation of S530 releases Hsp90’s block on the yeast-to-hyphae transition
@@ -52,13 +58,6 @@ lm(fluorescence ~ strain, data=mutate(Data3, strain=relevel(strain, ref='1384'))
 ```{r}
 morph_index <- read_delim(ffDataFolder("morph_index.txt"),
 "\t", escape_double = FALSE, trim_ws = TRUE)
-
-genotypes=data.frame(YSD=c("89", "1384", "1403", "1410", "1442", 
-                           "1444", "557", "622", "628", "634"), 
-                     genotype=factor(c("WT", "Mal2-Hsp90", "T25A", "T25E", "S530A", 
-                                       "S530E", "cka1∆/∆", "cka2∆/∆", "ckb1∆/∆", "ckb2∆/∆"),
-                                     levels=c("WT", "Mal2-Hsp90", "T25A", "T25E", "S530A",
-                                              "S530E", "cka1∆/∆", "cka2∆/∆", "ckb1∆/∆", "ckb2∆/∆")))
 
 morph_index <- morph_index %>% 
   mutate(YSD=as.character(YSD)) %>% 
