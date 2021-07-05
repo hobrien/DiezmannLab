@@ -15,8 +15,9 @@ library(pzfx)
 library(ggthemes)
 
 
-setff("DataFolder", file.path(Sys.getenv("DiezmannLab"), "T25", "data_files"))
-setff("FigFolder", file.path(Sys.getenv("DiezmannLab"), "T25", "Figures"))
+setff("DataFolder", file.path("T25", "data_files"))
+setff("FigFolder", file.path("T25", "Figures"))
+dir.create(ffFigFolder(), showWarnings = FALSE)
 ```
 
 # Fig 5b: Biofilm cell viability
@@ -49,7 +50,7 @@ lm(fluorescence ~ strain, data=mutate(Data3, strain=relevel(strain, ref='1384'))
 - Morphology index higher in dextrose for T25A, T25E and S530E
 - HIgher in maltose for Mal2-Hsp90 and no difference for WT and S530A
 ```{r}
-morph_index <- read_delim(ffDataFolder("/morph_index.txt"),
+morph_index <- read_delim(ffDataFolder("morph_index.txt"),
 "\t", escape_double = FALSE, trim_ws = TRUE)
 
 genotypes=data.frame(YSD=c("89", "1384", "1403", "1410", "1442", 
