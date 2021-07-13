@@ -47,13 +47,14 @@ dir.create(ffFigFolder(), showWarnings = FALSE)
 
 number_groups <- function(data, col) { data %>% mutate(bio_rep = group_indices_(., .dots=col)) }
 
-genotypes=data.frame(YSD=c("89", "577", "622", "628", "634",
+genotypes=data.frame(ysd=c("89", "577", "622", "628", "634",
                            "591", "667", "911", "687",
                            "883", "885", "961", "979"), 
                      genotype=c("WT", "cka1∆/∆", "cka2∆/∆", "ckb1∆/∆", "ckb2∆/∆",
                                 "fun31∆/∆", "thi20∆/∆", "orf19.792", "rim15∆/∆",
                                 "hog1∆/∆", "pbs2∆/∆", "mkk2∆/∆", "pkc1∆/∆"),
-                     category=c("WT", rep("CK2", 4), rep("FSK", 4), rep("Conserved", 4)))
+                     category=c("WT", rep("CK2", 4), rep("FSK", 4), rep("Conserved", 4))) %>%
+  mutate(genotype=ifelse(genotype=='WT', genotype, glue("*{genotype}*")))
 
 list_bio_reps <- function(data) {
   data %>% nest() %>%
@@ -63,7 +64,6 @@ list_bio_reps <- function(data) {
 }
 
 get_genotypes <- function(data, metadata, genotype_order){
-  genotype_order <- ifelse(genotype_order=='WT', genotype_order, glue("*{genotype_order}*"))
   data %>%  filter(! genotype %in% c('orf', 'orf19')) %>%
     mutate(genotype=tolower(genotype)) %>%
     left_join(filter(metadata, column_name=='genotype'),
@@ -112,7 +112,7 @@ antifungals %>%
   mutate(concentration=round(concentration, 4),
          gda=glue("{gda} µg/ml GDA"),
          genotype = factor(ifelse(genotype=='WT', genotype, glue("*{genotype}*")),
-                           levels=rev(ifelse(genotypes$genotype=='WT', genotypes$genotype, glue("*{genotypes$genotype}*"))))) %>%
+                           levels=rev(genotypes$genotype))) %>%
   filter(genotype != "orf19") %>% 
   ggplot(aes(x=as.factor(concentration), 
              y=genotype, 
@@ -225,20 +225,19 @@ manduca_survival <- list.files(path = ffDataFolder(), pattern = "^manduca_.*.xls
   ffDataFolder() %>% 
   lapply(read_excel) %>%
   bind_rows() %>%
-  rename(Treatment=treatment) %>% 
-  left_join(tibble(group=c(rep('ck2 complex', 4), 
-                                rep('fungal-specific', 4), 
-                                rep('conserved', 4)), 
-                        Treatment=c('cka1', 'cka2', 'ckb1', 'ckb2',
-                                    'fun31', 'thi20', 'rim15', 'rim11',
-                                    'hog1', 'mkk2', 'pkc1', 'pbs2')))
+  mutate(ysd=as.character(ysd)) %>% 
+  #rename(Treatment=treatment) %>%
+  #mutate(Treatment=ifelse(Treatment=='pbs', 'PBS', Treatment)) %>% 
+  left_join(genotypes) %>%
+  mutate(genotype=factor(ifelse(is.na(genotype), 'PBS', genotype),
+                         levels=c('PBS', genotypes$genotype)))
 
 make_surv_plot <- function(data_t, my_title) {
  surv_object <- Surv(time = data_t$futime, 
                      event = data_t$fustat)
  fit1 <- survfit(Surv(time = data_t$futime, 
-                     event = data_t$fustat) ~ Treatment, data = data_t)
- labels <- str_remove(names(fit1$strata), 'Treatment=')
+                     event = data_t$fustat) ~ genotype, data = data_t)
+ labels <- str_remove(names(fit1$strata), 'genotype=')
  title <- 'Cells per animal'
  colours <- c(calc_pal()(12)[1:3],calc_pal()(12)[5:7])
   draw_srv_plot(fit1, labels, my_title, colours, 1)
@@ -265,17 +264,17 @@ data_t <- manduca_survival %>%
                                       TRUE ~ 3)),
          fustat=as.integer(ifelse(is.na(`72`) | `72`==0, 1, 0)))
 
-(conserved_plot <- data_t %>% filter(group == 'conserved' | Treatment == 'wt' | Treatment =='pbs') %>% 
+(conserved_plot <- data_t %>% filter(category == 'Conserved' | genotype == 'WT' | genotype =='PBS') %>% 
   make_surv_plot('conserved'))
 
 ggsave(ffFigFolder("conserved_survival.png"), conserved_plot$plot)
 
-(fungal_specific_plot <- data_t %>% filter(group == 'fungal-specific' | Treatment == 'wt' | Treatment =='pbs') %>% 
+(fungal_specific_plot <- data_t %>% filter(category == 'FSK' | genotype == 'WT' | genotype =='PBS') %>% 
   make_surv_plot("Fungal-specific"))
 
 ggsave(ffFigFolder("fungal_specific_survival.png"), fungal_specific_plot$plot)
 
-(ck2_plot <- data_t %>% filter(group == 'ck2 complex' | Treatment == 'wt' | Treatment =='pbs') %>% 
+(ck2_plot <- data_t %>% filter(category == 'CK2' | genotype == 'WT' | genotype =='PBS') %>% 
   make_surv_plot("ck2"))
 
 ggsave(ffFigFolder("ck2_survival.png"), ck2_plot$plot)
