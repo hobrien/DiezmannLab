@@ -13,8 +13,33 @@ library(survival)
 library(ggfortify)
 library(survminer)
 library(glue)
+library(RColorBrewer)
+library(ggthemes)
 
 theme_set(theme_minimal())
+
+palette <- brewer.pal("Greys", n=9)
+color.background = palette[2]
+color.grid.major = palette[3]
+color.axis.text = palette[6]
+color.axis.title = palette[7]
+my_theme <- theme(axis.title=element_text(size=8, colour=color.axis.title),
+                  axis.text=element_text(size=6, colour=color.axis.text),
+                  axis.ticks=element_line(size=.25, colour = color.grid.major),
+                  legend.title=element_text(size=8, colour=color.axis.title),
+                  legend.text=element_text(size=6, colour=color.axis.text),
+                  legend.box.background=element_blank(),
+                  legend.key = element_rect(colour = NA, 
+                                            fill = NA),
+                  panel.background = element_blank(),
+                  panel.grid.major = element_line(size=.25, colour = color.grid.major),
+                  panel.border = element_rect(colour = color.grid.major,
+                                              fill=NA),
+                  strip.text.y=element_text(size=8, colour=color.axis.title),
+                  strip.text.x = element_blank(),
+                  legend.position='bottom'
+                  
+                          )
 
 setff("DataFolder", file.path(Sys.getenv("DiezmannLab"), "kinases", "data_files"))
 setff("FigFolder", file.path(Sys.getenv("DiezmannLab"), "kinases", "Figures"))
@@ -199,19 +224,36 @@ manduca_metadata <- read_excel(ffDataFolder("manduca_07march17.xlsx"), sheet="co
 manduca_survival <- list.files(path = ffDataFolder(), pattern = "^manduca_.*.xlsx") %>% 
   ffDataFolder() %>% 
   lapply(read_excel) %>%
-  bind_rows() %>% 
+  bind_rows() %>%
+  rename(Treatment=treatment) %>% 
   left_join(tibble(group=c(rep('ck2 complex', 4), 
                                 rep('fungal-specific', 4), 
                                 rep('conserved', 4)), 
-                        treatment=c('cka1', 'cka2', 'ckb1', 'ckb2',
+                        Treatment=c('cka1', 'cka2', 'ckb1', 'ckb2',
                                     'fun31', 'thi20', 'rim15', 'rim11',
                                     'hog1', 'mkk2', 'pkc1', 'pbs2')))
 
-make_surv_plot <- function(data_t) {
- fit1 <- survfit(Surv(data_t$futime, data_t$fustat) ~ treatment, data=data_t) 
- labels <- str_remove(names(fit1$strata), 'treatment=')
- ggsurvplot(fit1, legend='bottom',
-            legend.labs=labels, censor=FALSE)$plot + theme(legend.title=element_blank())
+make_surv_plot <- function(data_t, my_title) {
+ surv_object <- Surv(time = data_t$futime, 
+                     event = data_t$fustat)
+ fit1 <- survfit(Surv(time = data_t$futime, 
+                     event = data_t$fustat) ~ Treatment, data = data_t)
+ labels <- str_remove(names(fit1$strata), 'Treatment=')
+ title <- 'Cells per animal'
+ colours <- c(calc_pal()(12)[1:3],calc_pal()(12)[5:7])
+  draw_srv_plot(fit1, labels, my_title, colours, 1)
+}
+
+draw_srv_plot <- function(fit1, labels, title, colours, legend_rows) {
+ srv_theme <- my_theme+theme(panel.grid.major=element_blank())
+ ggsurvplot(fit1, data = data_t, legend='bottom',
+            pval = TRUE, pval.size=2, size=1,
+            legend.title=title, 
+            linetype = c(rep(1, length(labels)-1), 2),
+            legend.labs=labels, censor=FALSE,
+            palette=colours,
+            ggtheme=srv_theme) + 
+    guides(colour = guide_legend(nrow = legend_rows))
 }
 
 data_t <- manduca_survival %>% 
@@ -223,18 +265,18 @@ data_t <- manduca_survival %>%
                                       TRUE ~ 3)),
          fustat=as.integer(ifelse(is.na(`72`) | `72`==0, 1, 0)))
 
-(conserved_plot <- data_t %>% filter(group == 'conserved' | treatment == 'wt' | treatment =='pbs') %>% 
-  make_surv_plot() + scale_colour_brewer(palette = "Set1"))
+(conserved_plot <- data_t %>% filter(group == 'conserved' | Treatment == 'wt' | Treatment =='pbs') %>% 
+  make_surv_plot('conserved'))
 
-ggsave(ffFigFolder("conserved_survival.png"), conserved_plot)
+ggsave(ffFigFolder("conserved_survival.png"), conserved_plot$plot)
 
-(fungal_specific_plot <- data_t %>% filter(group == 'fungal-specific' | treatment == 'wt' | treatment =='pbs') %>% 
-  make_surv_plot() + scale_colour_brewer(palette = "Set1"))
+(fungal_specific_plot <- data_t %>% filter(group == 'fungal-specific' | Treatment == 'wt' | Treatment =='pbs') %>% 
+  make_surv_plot("Fungal-specific"))
 
-ggsave(ffFigFolder("fungal_specific_survival.png"), fungal_specific_plot)
+ggsave(ffFigFolder("fungal_specific_survival.png"), fungal_specific_plot$plot)
 
-(ck2_plot <- data_t %>% filter(group == 'ck2 complex' | treatment == 'wt' | treatment =='pbs') %>% 
-  make_surv_plot() + scale_colour_brewer(palette = "Set1"))
+(ck2_plot <- data_t %>% filter(group == 'ck2 complex' | Treatment == 'wt' | Treatment =='pbs') %>% 
+  make_surv_plot("ck2"))
 
-ggsave(ffFigFolder("ck2_survival.png"), ck2_plot)
+ggsave(ffFigFolder("ck2_survival.png"), ck2_plot$plot)
 ```
