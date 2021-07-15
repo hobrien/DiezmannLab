@@ -1,0 +1,35 @@
+---
+title: "Network Review"
+output: html_notebook
+---
+
+
+```{r}
+library(tidyverse)
+library(UpSetR)
+library(folderfun)
+
+setff("DataFolder", "data_files")
+setff("FigFolder", "Figures")
+setff("ResultsFolder", "Results")
+
+libraries<-read_tsv(ffDataFolder("candida_libraries.txt"))
+
+libraries <- bind_rows(tibble(library="Homann", gene=libraries$Homann),
+          tibble(library="Mitchell", gene=libraries$Mitchell),
+          tibble(library="Noble", gene=libraries$Noble),
+          tibble(library="GRACE", gene=libraries$GRACE)) %>%
+  mutate(count=1) %>% 
+  group_by(library, gene) %>% 
+  slice(1) %>% 
+  pivot_wider(names_from=library, values_from=count, values_fill=0) %>% 
+  filter(!is.na(gene))
+
+pdf(ffFigFolder("Candida_UpSet.pdf"))
+upset(as.data.frame(libraries))
+dev.off()
+
+libraries %>% write_tsv(ffResultsFolder("library_matrix.txt"))
+
+```
+
