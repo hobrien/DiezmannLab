@@ -1,0 +1,2344 @@
+---
+title: Hsp90 is required for faithful maintenance of the _Candida albicans_ diploid
+  genome status
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+rm(list=ls())
+library(tidyverse)
+library(RColorBrewer)
+library(grid)
+library(MASS)
+library(tufte)
+library(growthcurve)
+library(reshape)
+library(tidyverse)
+library(readxl)
+library(patchwork)
+library(nord)
+library(folderfun)
+
+setff("DataFolder", file.path(Sys.getenv("DiezmannLab"), "LoH", "data_files"))
+setff("FigFolder", file.path(Sys.getenv("DiezmannLab"), "LoH", "Figures"))
+dir.create(ffFigFolder(), showWarnings = FALSE)
+dir.create(ffFigFolder('Panels'), showWarnings = FALSE)
+
+theme_set(theme_minimal())
+
+FigFolder <- "~/Dropbox/DiezmannLab/Manuscripts/LoH_Hsp90/Figures/R_Figures/"
+DataFolder <- "~/Dropbox/DiezmannLab/R/LoH/DataFiles/"
+# read data from excel, match to plate map and calculate growth curve paramaters
+CalculateGrowth <- function(filename, platemap_range, data_range) {
+  growth_data <- read_excel(filename, range=platemap_range)
+  colnames(growth_data)<-1:12
+  growth_data$row<-toupper(letters[1:8])
+  growth_data$MutationCondition<-c('30C', '30C', '39C', '39C',	'GdA', 'GdA', 'Rad', 'Rad')
+  growth_data<-gather(growth_data, column, strain, -row, -MutationCondition) %>%
+    mutate(PlateAddress=paste0(row, column)) %>%
+    dplyr::select(-row, -column) %>% 
+    full_join(read_excel(filename, range=data_range), by=c('PlateAddress' = 'Time[s]')) %>%
+    dplyr::select(-PlateAddress) %>%
+    gather(time, OD, -strain, -MutationCondition) %>%
+    mutate(time=as.integer(time)) %>%
+    group_by(strain, MutationCondition, time) %>%
+    summarise(OD=mean(OD))
+    
+
+  growth_curves <- growth_data %>% group_by(strain, MutationCondition) %>%
+    nest() %>% 
+    mutate(fit=map(data, possibly(~ fit_growth(., time, OD), NA))) %>%
+    mutate(Vmax=map_dbl(map(fit, 'parameters', .default = NA), 
+                        'asymptote', .default = NA), 
+           max_rate=map_dbl(map(map(fit, 'parameters', .default = NA), 
+                                             'max_rate', .default = NA), 
+                                         'rate', .default = NA)) %>%
+    dplyr::select(-data, -fit)
+}
+
+# as above, but deals with wells with MutationConditoin swapped
+CalculateGrowthSwappedWells <- function(filename, platemap_range, data_range) {
+  growth_data <- read_excel(filename, range=platemap_range)
+  colnames(growth_data)<-1:12
+  growth_data$row<-toupper(letters[1:8])
+  growth_data$MutationCondition<-c('30C', '30C', '39C', '39C',	'GdA', 'GdA', 'Rad', 'Rad')
+  growth_data<-gather(growth_data, column, strain, -row, -MutationCondition) %>%
+    mutate(PlateAddress=paste0(row, column)) %>%
+    dplyr::select(-row, -column) %>% 
+    full_join(read_excel(filename, range=data_range), by=c('PlateAddress' = 'Time[s]')) %>%
+    mutate(MutationCondition=ifelse(PlateAddress %in% c('F3', 'F7', 'F11'), 'Rad',
+                                    ifelse(PlateAddress %in% c('G3', 'G7', 'G11'), 'GdA',
+                                    MutationCondition))) %>%
+    dplyr::select(-PlateAddress) %>%
+    gather(time, OD, -strain, -MutationCondition) %>%
+    mutate(time=as.integer(time)) %>%
+    group_by(strain, MutationCondition, time) %>%
+    summarise(OD=mean(OD))
+    
+
+  growth_curves <- growth_data %>% group_by(strain, MutationCondition) %>%
+    nest() %>% 
+    mutate(fit=map(data, possibly(~ fit_growth(., time, OD), NA))) %>%
+    mutate(Vmax=map_dbl(map(fit, 'parameters', .default = NA), 
+                        'asymptote', .default = NA), 
+           max_rate=map_dbl(map(map(fit, 'parameters', .default = NA), 
+                                             'max_rate', .default = NA), 
+                                         'rate', .default = NA)) %>%
+    dplyr::select(-data, -fit)
+}
+
+#as above, but uses genotype rather than mutation condition
+CalculateGrowthLoH <- function(filename, platemap_range, data_range) {
+  growth_data <- read_excel(filename, range=platemap_range)
+  colnames(growth_data)<-1:12
+  growth_data$row<-toupper(letters[1:8])
+  growth_data$Genotype<-c('Chr4_tel1/tel1', 'Chr4_tel1/tel1', 'Chr1_tel1/tel1', 'Chr1_tel1/tel1',	'Chr4_sti1/sti1', 'Chr4_sti1/sti1', 'Chr1_sti1/sti1', 'Chr1_sti1/sti1')
+  growth_data<-gather(growth_data, column, strain, -row, -Genotype) %>%
+    mutate(PlateAddress=paste0(row, column)) %>%
+    dplyr::select(-row, -column) %>% 
+    full_join(read_excel(filename, range=data_range), by=c('PlateAddress' = 'Time[s]')) %>%
+    dplyr::select(-PlateAddress) %>%
+    gather(time, OD, -strain, -Genotype) %>%
+    mutate(time=as.integer(time)) %>%
+    group_by(strain, Genotype, time) %>%
+    summarise(OD=mean(OD))
+    
+
+  growth_curves <- growth_data %>% group_by(strain, Genotype) %>%
+    nest() %>% 
+    mutate(fit=map(data, possibly(~ fit_growth(., time, OD), NA))) %>%
+    mutate(Vmax=map_dbl(map(fit, 'parameters', .default = NA), 
+                        'asymptote', .default = NA), 
+           max_rate=map_dbl(map(map(fit, 'parameters', .default = NA), 
+                                             'max_rate', .default = NA), 
+                                         'rate', .default = NA)) %>%
+    dplyr::select(-data, -fit)
+}
+my_palette <- nord_palettes$baie_mouton
+colour_set <- list('30deg'=my_palette[4],
+                   '37deg'=my_palette[5],
+                   '39deg'=my_palette[7],
+                   'GDA'=my_palette[3],
+                   'RAD'=my_palette[1])
+inhibitor_colours <- c(colour_set[['GDA']], colour_set[['RAD']])
+temp_colours <- c(colour_set[['30deg']], colour_set[['37deg']], colour_set[['39deg']])
+mutation_set <- nord_palettes$aurora[c(2:5)]
+mechanism_set <- nord_palettes$afternoon_prarie[c(5:7,9)]
+
+# Need to change variable mapped to colour: 
+#    df$mapped_var <- factor(df$mapped_var, levels=names(colour_mappings)) OR
+#    df <- mutate(df, mapped_var=factor(mapped_var, levels=names(colour_mappings)))
+
+SetColours <- function(df, column) {
+  col_quo <- enquo(column)
+  col_name <- quo_name(col_quo)
+  df %>% mutate(!!col_name := factor(!!col_quo, levels=names(colour_mappings)))
+}
+
+# for continuous variables, use viridis
+colour_mappings <- list('30C'=nord_palettes$baie_mouton[4],
+                       '37C'=nord_palettes$baie_mouton[5], 
+                       '39C'=nord_palettes$baie_mouton[7], 
+                       'GdA'=nord_palettes$baie_mouton[3], 
+                       'GDA'=nord_palettes$baie_mouton[3], 
+                       'Geldanamycin'=nord_palettes$baie_mouton[3], 
+                       'RAD'=nord_palettes$baie_mouton[1], 
+                       'Rad'=nord_palettes$baie_mouton[1], 
+                       'Radicicol'=nord_palettes$baie_mouton[1], 
+                       'Short'=nord_palettes$aurora[5], 
+                       'Long'=nord_palettes$aurora[3], 
+                       'Whole Chromosome'=nord_palettes$aurora[4], 
+                       'Unknown'=nord_palettes$aurora[2], 
+                       'WT'=nord_palettes$baie_mouton[4], # previously used afternoon_prarie[5] for WT
+                       'hsl1/hsl1'=nord_palettes$afternoon_prarie[6], 
+                       'sti1/sti1'=nord_palettes$afternoon_prarie[7], 
+                       'tel1/tel1'=nord_palettes$afternoon_prarie[9])
+
+scale_colour_discrete <- function(...) {
+ scale_colour_manual(..., values = unlist(colour_mappings))
+}
+scale_fill_discrete <- function(...) {
+ scale_fill_manual(..., values = unlist(colour_mappings))
+}
+```
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.height=4, dev.args = list(bg = 'transparent'),
+                      echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+
+* * * 
+
+# Comments to the reader
+
+This document contains the results of our investigation into the role of Hsp90 in _C. albicans_ genome integrity. Based on previous findings showing that thermal and antifungal drug stress as well as passage through a mammalian host increase rates of Loss-of-Heterozogysity (LoH), we asked if disturbing Hsp90 function, by pharmacological inhibition or exposure to high temperature, affects LoH rates, meassured as loss of the _URA3_ marker, and ploidy.
+
+Indeed, LoH rates increase in response to treatment with 3 µM Radicicol (RAD), 3 µM Geldanamycin (GdA) or exposure to 37˚C or 39˚C compared to the control (30˚C).
+
+To determine how Hsp90 stress alters the genome, we genotyped LoH events and measured ploidy levels in 2x96 strains that were collected post-Hsp90 stress from progenitors marked with _URA3_ on Chr1 and Chr4. Both, temperature and Hsp90 inhibition, result in changes in LoH events but only pharmacological inhibition of Hsp90, and not high temperature, result in ploidy shifts, including haploidy. 
+
+We next asked if these genomic changes are adaptive or not. To this end, the set of 2x 96 strains was (i) grown under the same Hsp90-stress conditions as before, (ii) exposed  to Fluconazole (MIC), and (iii) cultured  on different media affecting morphology or exerting cell wall stress. The key findings include:
+
+- Growth in Hsp90-stress inducing conditions
+
+      - Maximum growth (Vmax) is not affected by LoH but ploidy is negatively affecting max. growth in strains that initially experienced Hsp90 stress during high temperature and are grown again at 39˚C
+      - Growth rate during Hsp90 inhibition or high temperatures is affected by LoH events sustained during previous Hsp90 stress experienced at 39˚C (strains carrying short LoH events grow better, while strains with long LoH events grow slower)
+      - Growth rate is significantly reduced during growth 39˚C and in GdA in strains having experienced ploidy shifts during previous growth at 39˚C and in RAD
+
+
+- Drug resistance
+
+    - LoH events do not affect resistance to fluconazole but changes in ploidy due to temperature and inhibition result in changes in MIC, lower ploidy strains have higher MICs
+
+
+- Cell morphology and cell wall stressors
+
+      - Neither LoH nor ploidy affect the cells’ ability to grow and filament on different media and cell wall stressors, with one exception (Spider media, whole Chr events, GdA)
+
+After establishing that Hsp90 perturbations result in genomic changes, we aimed to get a more detailed overview of the kind of changes elicited by Hsp90 stress. From the set of 2x96 strains, 50 strains were selected for ddRAD sequencing and 20 strains, including the ura-prototroph progenitors, had their genomes sequenced to 100x coverage. ddRAD and genome sequencing data are not included here.
+
+Lastly, we were interested in identifying a possible pathway/mechanism by which Hsp90 affects the _C. albicans_ genome. Three Hsp90 genetic interactors (_HSL1_, _STI1_, _TEL1_), from a published chemical-genomic screen, were selected and clean gene deletion mutants tested for LoH rates, changes in LoH events and ploidy during standard growth at 30˚C. LoH rates were signficantly increased on three loci (Chr1R, Chr4L, Chr5L) in all three mutants. The _sti1∆/∆_ and _hsl1∆/∆_ mutants yielded different types of LoH events and _sti1_ deletion causes a significant reduction in ploidy relative to the wild type control. To assess fitness, 24 post_LoH strains were selected from the _sti1∆/∆_ and _tel1∆/∆_ backgrounds, _hsl1∆/∆_ post-LoH strains did not grow well enough for further characterisation. Sti1 had previously been shown to be required for chromosome stability (Chen, Nature, 2012) and Tel1 is involved in homologous recombination and DNA repair. Growth rate and maximum growth are affected by LoH events but not ploidy in _sti1∆/∆_ and _tel1∆/∆_ derivatives. 
+
+- Growth rate in 39˚C and GdA is lower in tel1∆/∆ and sti1∆/∆ derivatives than WT derivatives 
+- Growth rate is lower in strains with ‘whole chromosome’ LoH events
+- Maximum growth is not affected by ploidy but ‘whole chromosome’ sti1∆/∆ derivatives have lower max growth when grown at 39˚C
+
+In conclusion, Hsp90 is essential for maintaining _C. albicans_'s diploid status. During environmental stress, reduced Hsp90 function leads to genomic changes ranging from localized gene conversion events to haploidy. Some of these changes are beneficial in specific conditions. The Hsp90 clients Tel1 and Sti1 affect LoH rates, with Sti1 specifically regulating chromosome number. Genomic changes in response to reduced Hsp90 activity and their phenotypic consequences could provide a bet-hedging strategy ensuring survival by maximizing genetic diversity in the population. 
+
+
+
+# 1. Disturbing Hsp90 function results in increased LoH rates across the _C. albicans_ genome
+
+
+
+## Rate of LoH increases with pharmacological inhibition in a dose-dependent manner
+
+
+
+- plotted are LoH rates with 95\% confidence intervals
+- strain MYO1/MYO1::URA3 carries the _URA3_ marker on Chr5L
+- cells were exposed to Hsp90 inhibition for 16 hours at 30˚C
+- subsequent experiments were conducted with 3 µM GdA or 3 µM RAD as they were the highest doses eliciting an increase in LoH without affecting cell shape (elongating cells could possibliy affect the CFU assay used to measure LoH rates)
+
+No significant difference between intercept and slope between inhibitors, hence use simple model combining the data.
+
+```{r Hsp90_inhibitor_dose, message=FALSE, warning=FALSE}
+Hsp90_inhibitor_dose <- read.delim(ffDataFolder("GdA RAD dose.txt"))
+dodge <- position_dodge(width=0.6)
+
+Hsp90_inhibitor_dose$Inhibitor <- factor(Hsp90_inhibitor_dose$Inhibitor, levels=names(colour_mappings))
+(Hsp90_inhibitor_dose_plot <- ggplot(Hsp90_inhibitor_dose, aes(y=Rate, x=Conc, fill=Inhibitor)) +
+  geom_bar(stat='identity', position=dodge, width=0.6) +
+  geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  #ggtitle('Hsp90 inhibitor dose response') +
+  #pdf_theme() +
+  theme(legend.position='top') +
+  ylab("LoH rate/cell division") +
+  xlab("Inhibitor concentration (µM)")
+)
+
+ggsave(ffFigFolder("Panels/Hsp90_inhibitor_dose_plot.png"), plot=Hsp90_inhibitor_dose_plot, bg="transparent")
+
+lm(Rate ~ Conc, data=filter(Hsp90_inhibitor_dose, Inhibitor=='RAD')) %>% summary()
+lm(Rate ~ Conc, data=filter(Hsp90_inhibitor_dose, Inhibitor=='GdA')) %>% summary()
+lm(Rate ~ Conc + Inhibitor, data=Hsp90_inhibitor_dose) %>% summary()
+lm(Rate ~ Conc, data=Hsp90_inhibitor_dose) %>% summary()
+```
+
+
+
+## LoH rates increase with rising temperatures
+
+
+
+- plotted are LoH rates with 95\% confidence intervals
+- strain MYO1/MYO1::URA3 carries the _URA3_ marker on Chr5L
+- cells were grown at different temperatures for 16 hours
+
+
+
+```{r LoH_temperature, message=FALSE, warning=FALSE}
+LoH_temperature <- read.delim(ffDataFolder("Temperature_LoH.txt"))
+LoH_temperature$Temperature <- factor(LoH_temperature$Temperature, levels=names(colour_mappings))
+
+(LoH_temperature_plot <- ggplot(LoH_temperature, aes(y=Rate, x=Temperature, fill=Temperature)) +
+  geom_bar(stat='identity', position=dodge, width=0.6) +
+  geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  #ggtitle('LoH rates at the MYO1 (Chr 5L) locus in different conditions') +
+  #facet_grid(. ~ Treatment) +
+  #pdf_theme() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) +
+  theme(legend.position='bottom') +
+  ylab("LoH rate/cell division") +
+  xlab("Condition")
+)
+
+ggsave(ffFigFolder("Panels/LoH_temperature_plot.png"), bg="transparent")
+```
+
+
+
+## High temperature increases Hsp90 levels but reduces Hsp90 activity
+
+
+
+LoH rates rise with temperature and so do Hsp90 levels. This seem contradictory, unless, Hsp90 activity declines with temperature, independent of Hsp90 levels. To test this, Hsp90 levels were measured by Western blotting and antibody staining in cells grown at 30˚C, 37˚C and 39˚C. As expected, Hsp90 levels increase with temperature. To determine if activity is affected by temperature, the tester strain was exposed to increasing doses of GdA and RAD (0, 1, and 3 µM) while temperatures were also increasing. Highest LoH rates were observed during growth in 3 µM inhibitor and 39˚C. This suggests that while Hsp90 levels rise with temperature, Hsp90 acitivity is compromised. Reduced activity did not appear to affect stability of two well-characterised Hsp90 clients Hog1, Cdc28.
+
+
+- plotted are LoH rates with 95\% confidence intervals
+- Strain MYO1/MYO1::URA3 carries the _URA3_ marker on Chr5L
+- Western blots show that Hsp90 levels increase between 30˚C, 37˚C, and 39˚C
+- Increasing LoH rates with increasing doses of either Hsp90 inhibitor (GdA or RAD) suggest that while Hsp90 levels are elevated, Hsp90 activity is reduced 
+
+
+
+```{r Hsp90_levels_activity, message=FALSE, warning=FALSE}
+Hsp90_levels_activity <- read_tsv(ffDataFolder("Inhibition.txt"))
+Hsp90_levels_activity <- mutate(Hsp90_levels_activity, 
+                                InhibitorFull=ifelse(Inhibitor=='GdA', 'Geldanamycin', 'Radicicol'), 
+                                Inhibitor=factor(ifelse(uM==0, '30C', Inhibitor), levels=names(colour_mappings)),
+                                alpha=ifelse(uM==1, '1uM', '3uM'))
+dodge <- position_dodge(width=0.6)
+#Inhibition$Treatment <- relevel(Inhibition$Treatment, ref = 'None')
+(Hsp90_levels_activity_plot <- ggplot(Hsp90_levels_activity, aes(y=Rate, x=Temperature, fill=Inhibitor, alpha=factor(alpha))) +
+  geom_bar(stat='identity', position=dodge, width=0.6) +
+  geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  #ggtitle('LoH rates at the MYO1 (Chr 5L) locus in different conditions') +
+  facet_grid(. ~ InhibitorFull) +
+  #pdf_theme() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) +
+  theme(legend.position='bottom') +
+  #scale_fill_manual(values=c(colour_set[['30deg']], inhibitor_colours)) +
+  scale_alpha_manual(values=c(.5,1), name='Inhibitor Concentration') +
+  ylab("LoH rate/cell division") +
+  xlab("Temperature") +
+  theme(legend.position = 'bottom'))
+
+ggsave(ffFigFolder("Panels/Hsp90_levels_activity_plot.png"), plot=Hsp90_levels_activity_plot, bg="transparent")
+
+# Add dummy row of data to force third panel, which will give a 2/3 page plot
+Hsp90_levels_activity[nrow(Hsp90_levels_activity)+1,] = Hsp90_levels_activity[1,]
+Hsp90_levels_activity[nrow(Hsp90_levels_activity),8] <- 'Z'
+(Hsp90_levels_activity_plot <- ggplot(Hsp90_levels_activity, aes(y=Rate, x=Temperature,fill=Inhibitor, alpha=factor(alpha))) +
+  geom_bar(stat='identity', position=dodge, width=0.6) +
+  geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  #ggtitle('LoH rates at the MYO1 (Chr 5L) locus in different conditions') +
+  facet_grid(. ~ InhibitorFull) +
+  #pdf_theme() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) +
+  theme(legend.position='bottom') +
+  #scale_fill_manual(values=c(colour_set[['30deg']], inhibitor_colours)) +
+  ylab("LoH rate/cell division") +
+  xlab("Temperature") +
+  theme(legend.position = 'none'))
+
+Hsp90_levels_activity <- Hsp90_levels_activity[-nrow(Hsp90_levels_activity),]
+```
+
+
+## Pharmacological inhibition of Hsp90 results in increased LoH rates genome-wide
+
+
+
+- four chromosomes (Chr1, Chr4, Chr5, Chr6) were marked with the _URA3_ marker in 8 locations
+- plotted are LoH rates with 95\% confidence intervals
+- RAD and GdA do not significantly differ from each other but both are significantly different from the untreated control
+
+
+
+
+```{r LoH_inhibitor_genome, message=FALSE, warning=FALSE}
+LoH_inhibitor_genome <- read.delim(ffDataFolder("LoH genome2.txt"))
+LoH_inhibitor_genome$Locus <- factor(LoH_inhibitor_genome$Locus, levels=c("GAL1", "PHO85", "HCM1", "AXL2",  "TUB4",  "MYO1", "BUD7",  "SAP5",  "LIP4"))
+
+LoH_inhibitor_genome$Treatment <- factor(LoH_inhibitor_genome$Treatment, levels=names(colour_mappings))
+dodge <- position_dodge(width=0.75)
+(LoH_inhibitor_genome_plot <- ggplot(subset(LoH_inhibitor_genome, Treatment == '30C' | Treatment == 'Radicicol' | Treatment == 'Geldanamycin'), aes(y=Rate, x=Locus, fill=Treatment)) +
+  geom_bar(stat='identity', position=dodge, width=0.75)+
+  geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.375) +
+  #ggtitle('Genome-wide LoH rates when treated with 3 µM Radicicol or Geldanamycin at 30C') +
+  #pdf_theme() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) +
+  theme(legend.position='top') +
+  #scale_fill_manual(values=c(colour_set[['30deg']], inhibitor_colours)) +
+  ylab("LoH rate/cell division") +
+  xlab("Genomic locus")
+)
+ggsave(ffFigFolder("Panels/LoH_inhibitor_genome_plot.png"), plot=LoH_inhibitor_genome_plot, bg="transparent")
+```
+
+
+
+## Wilcoxon Signed Rank test
+
+
+
+```{r WSR_GdA_RAD, message=FALSE, warning=FALSE}
+WSR <- read.delim(ffDataFolder("WSR_GdA_RAD.txt"))
+wilcox.test(WSR$GdA, WSR$RAD)
+```
+
+
+
+```{r WSR_GdA_30C, message=FALSE, warning=FALSE}
+WSR <- read.delim(ffDataFolder("WSR_30C_GdA.txt"))
+wilcox.test(WSR$X30C, WSR$Geldanamycin)
+```
+
+
+
+```{r WSR_RAD_30C, message=FALSE, warning=FALSE}
+WSR <- read.delim(ffDataFolder("WSR_30C_RAD.txt"))
+wilcox.test(WSR$X30C, WSR$RAD)
+```
+
+
+
+## Genome-wide LoH rates increase during growth in elevated temperatures
+
+
+- the same 8 strains as above were exposed to elevated temperatures and LoH rates recorded
+- plotted are LoH rates with 95\% confidence intervals
+- while 37˚C and 39˚C are not significantly different from each other in terms of LoH rates, both elicit a higher rate of LoH than the control at 30˚C
+
+
+
+```{r LoH_temperature_genome, echo=FALSE, message=FALSE, warning=FALSE}
+LoH_temperature_genome <- read.delim(ffDataFolder("LoH genome2.txt"))
+LoH_temperature_genome$Locus <- factor(LoH_temperature_genome$Locus, levels=c("GAL1", "PHO85", "HCM1", "AXL2",  "TUB4",  "MYO1", "BUD7",  "SAP5",  "LIP4"))
+dodge <- position_dodge(width=0.75)
+(LoH_temperature_genome_plot <- ggplot(subset(LoH_temperature_genome, Treatment == '30C' | Treatment == '37C' | Treatment == '39C'), aes(y=Rate, x=Locus, fill=Treatment)) +
+  geom_bar(stat='identity', position=dodge, width=0.75)+
+  geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.375) +
+  #ggtitle('Genome-wide LoH rates at 30C, 37C and 39C') +
+  #pdf_theme() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) +
+  theme(legend.position='top') +
+  scale_fill_manual(values=temp_colours) +
+  ylab("LoH rate/cell division") +
+  xlab("Genomic locus")
+)
+ggsave(ffFigFolder("Panels/LoH_temperature_genome_plot.png"), plot=LoH_temperature_genome_plot, bg="transparent")
+
+```
+
+
+## Wilcoxon Signed Rank test
+
+
+```{r WSR_30_37, echo=FALSE, message=FALSE, warning=FALSE}
+WSR <- read.delim(ffDataFolder("WSR_30C_37C.txt"))
+wilcox.test(WSR$X30C, WSR$X37C)
+```
+
+```{r WSR_30_39, echo=FALSE, message=FALSE, warning=FALSE}
+WSR <- read.delim(ffDataFolder("WSR_30C_39C.txt"))
+wilcox.test(WSR$X30C, WSR$X39C)
+```
+
+```{r WRS 37_39, echo=FALSE, message=FALSE, warning=FALSE}
+WSR <- read.delim(ffDataFolder("WSR_37C_39C.txt"))
+wilcox.test(WSR$X37C, WSR$X39C)
+```
+
+
+
+## Hsp90 inhibition and growth at high temperatures increase LoH rates - Fig. 1
+
+
+
+```{r LoH_inhibitor_temperature_all, message=FALSE, warning=FALSE}
+#fig1c<- fig1c + theme(plot.margin=margin(1,6,1,1,'cm'))
+
+# width and height in inches, making height 3.33 produces figure that is 1/3 of height but centered, can be modified and moved in AI
+
+fig1 <- (Hsp90_inhibitor_dose_plot | LoH_temperature_plot) / #slash = linebreak
+Hsp90_levels_activity_plot  /
+(LoH_inhibitor_genome_plot | LoH_temperature_genome_plot) & theme(legend.position = 'none') & 
+  theme(strip.text.x = element_text(size = 10, face='bold'))
+
+# & will format all panels with whatever is specified; to format, copy comands from FormatGGplot.R incl. textsixe, angle, justified, font type etc
+
+
+ggsave(ffFigFolder("Figure1.pdf"), fig1, width=7, height=10)
+```
+
+
+
+# 2. Genome-scale changes in response to Hsp90 inhibition and high temperature growth
+
+
+
+## Hsp90 stress changes LoH events on Chr1 and Chr4
+
+
+
+- progenitor strains marked on Chr1 (_HCM1_) and Chr4 (_AXL2_) were grown at control condition (30˚C), high temperature (39˚C), and in the presence of Hsp90 inhibitors (GdA, RAD)
+- for each condition, 24 derivative strains were collected, totalling 96 strains for each marked chromosome
+- derivatives were genotyped using Anja's SNP-RFLP primers and enzymes and LoH events identified as 'short' (LoH of _URA3_ and/or the neighbouring SNP/RFLP), 'long' (LoH of both markers on the same arm as _URA3_), and 'whole chromosome' (LoH of all SNPs on the chromosome)
+- plotted are counts of LoH events for each condition they were sustained in and partitioned by the _URA3_ marker location of the progenitor strain (Chr1 or Chr4)
+- since we are comparing two categorical variables, a chi square test was used to determine differences between treatment and chromosome
+- for each chromosome, 30˚C was tested vs each of the other three treatments
+- all comparisons are significant except for RAD on Chr1
+
+ 
+
+```{r LoH_Chr1_Chr4, echo=FALSE, message=FALSE, warning=FALSE}
+LoH_Chr1_Chr4 <- read.delim(ffDataFolder("SNP_RFLP2.txt"))
+LoH_Chr1_Chr4$LoH_event <- factor(LoH_Chr1_Chr4$LoH_event, levels=names(colour_mappings))
+
+# create figure, save to p1
+LoH_Chr1_Chr4_plot <- ggplot(LoH_Chr1_Chr4, aes(y=Count, x=Treatment, fill=LoH_event)) +
+  geom_bar(stat='identity', width=0.6) +
+  facet_grid(~ Locus) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  #ggtitle('LoH type and rate across the genome') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  #scale_fill_manual(values=mutation_set) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  ylab("Count") +
+  xlab("Condition") +
+  labs(fill="")
+
+# save p1 to png file
+#png(filename="~/Dropbox/! Diezmann Lab/Manuscripts/LoH_Hsp90/Figures/R_Figures/Figure_2a.png", bg="transparent", width=900, height=900, units="px")
+#fig2a
+#dev.off()
+
+ggsave(ffFigFolder("Panels/LoH_Chr1_Chr4_plot.png"), plot=LoH_Chr1_Chr4_plot, bg="transparent")
+print(LoH_Chr1_Chr4_plot)
+
+#lohevent
+
+# print png in markdown document
+#fig2a
+```
+
+
+
+```{r LoH_chi_square, echo=FALSE, message=FALSE, warning=FALSE}
+
+LoHevents <- read_tsv(ffDataFolder("SNP_RFLP2.txt"))
+LoHevents <- filter(LoHevents, LoH_event != 'Unknown')
+expanded<-untable(LoHevents, num=LoHevents$Count) 
+chr1 <- filter(expanded, Locus == 'Chromosome 1') %>% dplyr::select(Treatment, LoH_event) 
+chr4 <- filter(expanded, Locus == 'Chromosome 4') %>% dplyr::select(Treatment, LoH_event)
+both <- expanded %>% dplyr::select(Treatment, LoH_event)
+
+tibble(Locus=c('chr1', 'chr4', 'both'), 
+     `39C`=c(chisq.test(table(filter(chr1, Treatment == '30C' | Treatment == '39C')))$p.value,
+             chisq.test(table(filter(chr4, Treatment == '30C' | Treatment == '39C')))$p.value,
+             chisq.test(table(filter(both, Treatment == '30C' | Treatment == '39C')))$p.value),
+     GdA=c(chisq.test(table(filter(chr1, Treatment == '30C' | Treatment == 'GdA')))$p.value,
+             chisq.test(table(filter(chr4, Treatment == '30C' | Treatment == 'GdA')))$p.value,    
+             chisq.test(table(filter(both, Treatment == '30C' | Treatment == 'GdA')))$p.value),    
+     RAD=c(chisq.test(table(filter(chr1, Treatment == '30C' | Treatment == 'RAD')))$p.value,
+             chisq.test(table(filter(chr4, Treatment == '30C' | Treatment == 'RAD')))$p.value,    
+             chisq.test(table(filter(both, Treatment == '30C' | Treatment == 'RAD')))$p.value))    
+
+```
+
+
+
+## Hsp90 inhibition but not high temperature results in changes in ploidy
+
+
+
+- ploidy levels were determined for the 2x 96 post-LoH strains
+- note that some strains comprise mixed populations with two or three ploidy values, they are treated as independent observations
+- linear modelling when combining both chromosomes shows that GdA and RAD are significantly diff from 30˚C but 39˚C is not
+- when splitting chromosomes, Hsp90 inihbition is still significant but only on Chr1
+
+
+
+```{r ploidy_Chr1_Chr4, message=FALSE, warning=FALSE}
+ploidy_Chr1_Chr4 <- read.delim(ffDataFolder("Ploidy2.txt"))
+
+ploidy_Chr1_Chr4 <- ploidy_Chr1_Chr4 %>% mutate(Chromosome = paste('Chromosome', Chromosome))
+# create figure, save to p1
+ploidy_Chr1_Chr4_plot <- ggplot(ploidy_Chr1_Chr4, aes(y=Ploidy, x=Condition, colour=Condition)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  #ggtitle('LoH type and rate across the genome') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  ylab("Ploidy") +
+  xlab("Condition") +
+  labs(fill="")
+
+
+ggsave(ffFigFolder("Panels/ploidy_Chr1_Chr4_plot.png"), plot=ploidy_Chr1_Chr4_plot, bg="transparent")
+print(ploidy_Chr1_Chr4_plot)
+
+
+lm(Ploidy ~ Condition, data=ploidy_Chr1_Chr4) %>% summary()
+lm(Ploidy ~ Condition, data=filter(ploidy_Chr1_Chr4, Chromosome == 'Chromosome 1')) %>% summary()
+lm(Ploidy ~ Condition, data=filter(ploidy_Chr1_Chr4, Chromosome == 'Chromosome 4')) %>% summary()
+
+#ploidy
+
+```
+
+
+
+## Changes in LoH and ploidy status on Chr1 and Chr4 - Fig. 2
+
+
+
+```{r LoH_ploidy_Chr1_Chr4, message=FALSE, warning=FALSE}
+#fig1c<- fig1c + theme(plot.margin=margin(1,6,1,1,'cm'))
+
+#pdf(file=paste0(FigFolder, "Figure2.pdf"),  paper='a4', width=7, height=3.33, pagecentre=TRUE)
+
+# width and height in inches, making height 3.33 produces figure that is 1/3 of height but centered, can be modified and moved in AI
+
+fig2 <- (LoH_Chr1_Chr4_plot | ploidy_Chr1_Chr4_plot) & #slash = linebreak
+#fig1c  /
+#(fig1d | fig1e) 
+  #theme(legend.position = 'none') & 
+  theme(strip.text.x = element_text(size = 10, face='bold'))
+
+ggsave(ffFigFolder("Figure2.pdf"), fig2, width=7, height=3.33)
+# & will format all panels with whatever is specified; to format, copy comands from FormatGGplot.R incl. textsixe, angle, justified, font type etc
+
+
+```
+
+
+
+# 3. LoH and ploidy in response to Hsp90 stress are adaptive in different environments
+
+
+
+```{r prepare_growth_curves}
+filename <- ffDataFolder("Growth curve with 3 replicates HCM1 locus.xlsx")
+platemap1 <- "260816 plate map!C6:N14"
+platemap2 <- "310816 plate map!C6:N14"
+platemap3 <- "040916 plate map!C6:N14"
+HCM1growth_curves <- bind_rows(
+  CalculateGrowth(filename, platemap1, "260816 original data!B7:CU103") %>%
+    mutate(GrowthCondition='30C'),
+  CalculateGrowth(filename, platemap1, "270816 original data!B7:CU103") %>%
+    mutate(GrowthCondition='39C'),
+  CalculateGrowth(filename, platemap1, "280816 original data!B7:CU103") %>%
+    mutate(GrowthCondition='GdA'),
+  CalculateGrowth(filename, platemap1, "290816 original data!B7:CU103") %>%
+    mutate(GrowthCondition='Rad'),
+  CalculateGrowth(filename, platemap2, "310816 original data!B7:CU103") %>%
+    mutate(GrowthCondition='30C'),
+  CalculateGrowth(filename, platemap2, "010916 original data!B7:CU103") %>%
+    mutate(GrowthCondition='39C'),
+  CalculateGrowth(filename, platemap2, "020916 original data!B7:CU103") %>%
+    mutate(GrowthCondition='GdA'),
+  CalculateGrowth(filename, platemap2, "030916 original data!B7:CU103") %>%
+    mutate(GrowthCondition='Rad'),
+  CalculateGrowth(filename, platemap3, "040916 original data!B7:CU103") %>%
+    mutate(GrowthCondition='30C'),
+  CalculateGrowth(filename, platemap3, "050916 original data!B7:CU103") %>%
+    mutate(GrowthCondition='39C'),
+  CalculateGrowth(filename, platemap3, "060916 original data!B7:CU103") %>%
+    mutate(GrowthCondition='GdA'),
+  CalculateGrowth(filename, platemap3, "070916 original data!B7:CU103") %>%
+    mutate(GrowthCondition='Rad')
+) %>% mutate(Chromosome = 'Chr1')
+
+write_tsv(HCM1growth_curves, ffDataFolder("HCM1_Growth_Parameters"))
+
+filename <- ffDataFolder("Growth curve with 3 replicates AXL2 locus.xlsx")
+platemap1 <- "030816 plate map!C6:N14"
+platemap2 <- "100816 plate map!C6:N14"
+platemap3 <- "190816 plate map!C6:N14"
+AXL2growth_curves <- bind_rows(
+  CalculateGrowth(filename, platemap1, "030816 original data!B7:CU103") %>%
+    mutate(GrowthCondition='30C'),
+  CalculateGrowth(filename, platemap1, "060816 original data!B7:CU103") %>%
+    mutate(GrowthCondition='39C'),
+  CalculateGrowth(filename, platemap1, "070816 original data!B7:CU103") %>%
+    mutate(GrowthCondition='GdA'),
+  CalculateGrowth(filename, platemap1, "080816 original data!B7:CU103") %>%
+    mutate(GrowthCondition='Rad'),
+  CalculateGrowth(filename, platemap2, "100816 original data!B7:CU103") %>%
+    mutate(GrowthCondition='30C'),
+  CalculateGrowth(filename, platemap2, "140816 original data!B7:CU103") %>%
+    mutate(GrowthCondition='39C'),
+  CalculateGrowth(filename, platemap2, "170816 original data!B7:CU103") %>%
+    mutate(GrowthCondition='GdA'),
+  CalculateGrowth(filename, platemap2, "180816 original data!B7:CU103") %>%
+    mutate(GrowthCondition='Rad'),
+  CalculateGrowthSwappedWells(filename, platemap3, "190816 original data!B7:CU103") %>%
+    mutate(GrowthCondition='30C'),
+  CalculateGrowthSwappedWells(filename, platemap3, "200816 original data!B7:CU103") %>%
+    mutate(GrowthCondition='39C'),
+  CalculateGrowthSwappedWells(filename, platemap3, "210816 original data!B7:CU103") %>%
+    mutate(GrowthCondition='GdA'),
+  CalculateGrowthSwappedWells(filename, platemap3, "220816 original data!B7:CU103") %>%
+    mutate(GrowthCondition='Rad')
+) %>% mutate(Chromosome = 'Chr4')
+
+write_tsv(AXL2growth_curves, ffDataFolder("AXL2_Growth_Parameters"))
+
+Growth <- bind_rows(HCM1growth_curves, AXL2growth_curves)
+```
+
+
+
+## LoH and subsequent growth during Hsp90 stress conditions
+
+
+
+- 96 deriviative strains, previously carrying _URA3_ on Chr1 or Chr4, were grown in triplicates at 30˚C, 39˚C, and in the presence of RAD or GdA
+- maximum growth (Vmax) and maximum growth rate (max_rate) were calculated and plotted relative to the condition the strains experienced LoH initially in (x-axis) and the type of LoH event sustained (color)
+- for max_rate: (i) LoH events sustained during growth at 39˚C cause a significant reduction in max_rate (0.000123), (ii) short events grow overall better than long events (4.74e-08), while (iii) whole Chr events do worse than long events (< 2e-16)
+
+
+
+```{r LoH_growth, message=FALSE, warning=FALSE, dependson='prepare_growth_curves'}
+
+LoH_growth <- read_tsv(ffDataFolder("LoH.txt")) %>%
+  dplyr::rename(strain=Colony, MutationCondition=Condition) %>%
+  mutate(Chromosome = paste0('Chr', Chromosome),
+         MutationCondition = ifelse(MutationCondition == 'RAD', 'Rad', MutationCondition)) %>%
+  full_join(Growth) %>%
+  filter(LoH_event != 'Unknown')
+
+(LoH_max_rate_plot <- ggplot(LoH_growth, aes(y=max_rate, x=GrowthCondition, colour=LoH_event)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(Chromosome ~ MutationCondition) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  #ggtitle('LoH type and rate across the genome') +
+theme(legend.position='bottom', 
+      #legend.key=element_rect(size=1, color="white", alpha=1),
+      legend.key=element_blank(),
+      legend.key.size=unit(1, "lines")) +
+  #scale_color_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  #ylab("Vmax") +
+  #xlab("Ploidy") +
+  #guides(colour=FALSE) +
+  labs(fill=""))
+
+ggsave(ffFigFolder("Panels/LoH_max_rate_plot.png"), bg="transparent")
+
+
+(LoH_Vmax_plot <- ggplot(LoH_growth, aes(y=Vmax, x=GrowthCondition, colour=LoH_event)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(Chromosome ~ MutationCondition) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  #ggtitle('LoH type and rate across the genome') +
+theme(legend.position='bottom',
+      legend.key=element_blank(),
+      legend.key.size=unit(1, "lines")) +
+  #scale_color_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  #ylab("Vmax") +
+  #xlab("Ploidy") +
+  #guides(colour=FALSE) +
+  labs(fill="") +
+  scale_y_continuous(limits=c(1,3)))
+
+ggsave(ffFigFolder("Panels/LoH_Vmax_plot.png"), bg="transparent")
+
+
+
+rate1 <- lm(Vmax ~ GrowthCondition + MutationCondition, data=LoH_growth)
+rate2 <- lm(Vmax ~ GrowthCondition * MutationCondition, data=LoH_growth)
+anova(rate1, rate2)
+
+#summary(rate2)
+
+
+max1 <- lm(max_rate ~ GrowthCondition + MutationCondition + LoH_event, data=LoH_growth)
+
+summary(max1)
+
+# example of testing overall effect of main terms. Pr(>F) is << 0.05, therefor the model without LoH_event is a significantly worse fit. The same thing happens when dropping the other terms
+max2 <- lm(max_rate ~ GrowthCondition + MutationCondition, data=LoH_growth)
+anova(max1, max2)
+
+#Pr(>F) is < 0.05, therefore the model with an interaction between LoH_event and GrowthCondition is a significantly better fit (note that max1 is now the reduced model, whereas above it is the full model). There is also a marginally (p=0.0428) significant interaction between LoH_event and MutationCondition
+max3 <- lm(max_rate ~  MutationCondition + GrowthCondition + LoH_event + GrowthCondition:LoH_event, data=LoH_growth)
+anova(max3, max1)
+
+#Pr(>F) = 0.03937, so there is marginal evidence that the effect of LoH_event depends on MutationCondition in addition to GrowthCondition (this interaction term is slightly less significant when the interaction between LoH_event and GrowthCondition is not taken into account)
+max4 <- lm(max_rate ~  MutationCondition + GrowthCondition + LoH_event + GrowthCondition:LoH_event + MutationCondition:LoH_event, data=LoH_growth)
+anova(max4, max3)
+
+#max_rate is higher for LoH short mutants than for LoH short mutants in general but the difference is significantly larger at 39 deg (including the interaction makes the overall difference smaller, but it is still significant)
+summary(max3)
+
+# three-way interaction is not significant (with or without accounting for the significant 2-way interactions), so the data do not support the hypothesis that max_rate is higher/lower for when growth conditions match mutation conditions for some types of mutants but not others.
+max5 <- lm(max_rate ~  MutationCondition + GrowthCondition + LoH_event + GrowthCondition:LoH_event + MutationCondition:LoH_event + GrowthCondition:LoH_event:MutationCondition + MutationCondition:LoH_event, data=LoH_growth)
+anova(max5, max4)
+
+######################################################
+rate1 <- lm(Vmax ~ GrowthCondition + MutationCondition + LoH_event, data=LoH_growth)
+
+summary(rate1)
+
+# example of testing overall effect of main terms. Pr(>F) is > 0.05, therefore the model with MutationCondition is a significantly worse fit than the model that includes it. This means that MutationCondition does not affect Vmax. The model is a significantly worse fit when the other terms are dropped
+rate2 <- lm(Vmax ~ GrowthCondition + MutationCondition, data=LoH_growth)
+anova(rate1, rate2)
+
+#This is an example of testing interaction terms. None of the interactions significantly improves the model
+rate3 <- lm(Vmax ~  MutationCondition + GrowthCondition + LoH_event + GrowthCondition:MutationCondition, data=LoH_growth)
+anova(rate3, rate1)
+
+# three-way interaction is also not significant so the data do not support the hypothesis that Vmax is higher/lower for when growth conditions match mutation conditions for some types of mutants but not others.
+rate4 <- lm(Vmax ~  MutationCondition + GrowthCondition + LoH_event + LoH_event:MutationCondition:GrowthCondition, data=LoH_growth)
+anova(rate4, rate1)
+
+#lohvmax
+
+```
+
+
+
+## LoH events do not affect subsequent survival of drug exposure
+
+
+
+- 2x96 LoH derivative strains were grown in increasing doses of fluconazole ranging from 0.25 to 256 µg/ml in YPD at 30˚C
+
+
+
+```{r LoH_drug, message=FALSE, warning=FALSE}
+LoH_drug <- read.delim(ffDataFolder("LoH_Drug.txt"))
+LoH_drug <- LoH_drug %>% filter(LoH_event != 'Unknown')
+
+LoH_drug <- LoH_drug %>% mutate(Chromosome = paste0('Chromosome ', Chromosome))
+
+LoH_drug <- mutate(LoH_drug, LoH_event=factor(LoH_event, levels=names(colour_mappings)))
+
+# create figure, save to p1
+(LoH_drug_plot <- ggplot(LoH_drug, aes(y=log2(MIC), x=Condition, colour=LoH_event)) +
+  geom_jitter(width=.2, size=1) +
+  facet_grid(~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  #ggtitle('LoH type and rate across the genome') +
+  theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"),
+        legend.key.size=unit(1, "lines")) +
+  #scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="") )
+  #guides(colour=FALSE))
+
+ggsave(ffFigFolder("Panels/LoH_drug_plot.png"), plot=LoH_drug_plot, bg="transparent")
+
+lm(log2(MIC) ~ LoH_event * Condition, data=LoH_drug) %>% summary()
+lm(log2(MIC) ~ LoH_event * Condition, data=filter(LoH_drug, Chromosome == 'Chromosome 1')) %>% summary()
+lm(log2(MIC) ~ LoH_event * Condition, data=filter(LoH_drug, Chromosome == 'Chromosome 4')) %>% summary()
+
+#lohdrug
+
+```
+
+
+
+## LoH events do not influence growth on media affecting morphology and containing cell wall stressors
+
+
+
+- LoH derivative strains were spotted onto YPD, RPMI, Spider, and Lee's to determine if genomic changes affect morphology
+- LoH derivatives were spotted onto SD media and SD containing Calcoflour White or Congo Red to identify change in the response to cell wall stressors
+- colonies from biological triplicates were scored for growth and the scores averaged and plotted  
+
+
+
+```{r LoH_media_growth, message=FALSE, warning=FALSE}
+
+#lohmediagrowth
+
+LoH_media_growth <- read.delim(ffDataFolder("LoH_media_Growth.txt"))
+LoH_media_growth <- LoH_media_growth %>% filter(LoH_event != 'Unknown')
+LoH_media_growth <- LoH_media_growth %>% mutate(Chromosome = paste0('Chromosome ', Chromosome)) 
+
+LoH_media_growth <- mutate(LoH_media_growth, LoH_event=factor(LoH_event, levels=names(colour_mappings)))
+
+LoH_media_growth_RPMI_plot <- ggplot(LoH_media_growth, aes(y=RPMI, x=Condition, colour=LoH_event)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_wrap(~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('RPMI') +
+  ylab('Growth') +
+  theme(legend.position='bottom', 
+        legend.key=element_rect(size=1, color="white"), 
+        legend.key.size=unit(1, "lines")) +
+  #scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="") +
+  guides(colour=FALSE)
+
+ggsave(ffFigFolder("Panels/LoH_media_growth_RPMI_plot.png"), plot=LoH_media_growth_RPMI_plot, bg="transparent")
+print(LoH_media_growth_RPMI_plot)
+
+
+
+(LoH_media_growth_spider_plot <- ggplot(LoH_media_growth, aes(y=Spider, x=Condition, colour=LoH_event)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_wrap(~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('Spider') +
+  ylab('Growth') +
+  theme(legend.position='bottom',
+        legend.key=element_rect(size=1, color="white"),
+        legend.key.size=unit(1, "lines")) +
+  #scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="") +
+  guides(colour=FALSE))
+
+ggsave(ffFigFolder("Panels/LoH_media_growth_spider_plot.png"), plot=LoH_media_growth_spider_plot, bg="transparent")
+print(LoH_media_growth_spider_plot)
+
+
+
+LoH_media_growth_Lee_plot <- ggplot(LoH_media_growth, aes(y=Lee.s, x=Condition, colour=LoH_event)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_wrap(~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle("Lee's") +
+  ylab('Growth') +
+  theme(legend.position='bottom',
+        legend.key=element_rect(size=1, color="white"),
+        legend.key.size=unit(1, "lines")) +
+  #scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="") +
+  guides(colour=FALSE)
+ggsave(ffFigFolder("Panels/LoH_media_growth_Lee_plot.png"), plot=LoH_media_growth_Lee_plot, bg="transparent")
+print(LoH_media_growth_Lee_plot)
+
+
+
+LoH_media_growth_YPD_plot <- ggplot(LoH_media_growth, aes(y=YPD, x=Condition, colour=LoH_event)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_wrap(~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('YPD') +
+  ylab('Growth') +
+  theme(legend.position='bottom',
+      legend.key=element_rect(size=1, color="white"),
+      legend.key.size=unit(1, "lines")) +
+  #scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="") +
+  guides(colour=FALSE)
+ggsave(ffFigFolder("Panels/LoH_media_growth_YPD_plot.png"), plot=LoH_media_growth_YPD_plot, bg="transparent")
+print(LoH_media_growth_YPD_plot)
+
+
+
+LoH_media_growth_SD_plot <- ggplot(LoH_media_growth, aes(y=SD, x=Condition, colour=LoH_event)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_wrap(~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('SD') +
+  ylab('Growth') +
+  theme(legend.position='bottom',
+        legend.key=element_rect(size=1, color="white"),
+        legend.key.size=unit(1, "lines")) +
+  #scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="") +
+  guides(colour=FALSE)
+ggsave(ffFigFolder("Panels/LoH_media_growth_SD_plot.png"), plot=LoH_media_growth_SD_plot, bg="transparent")
+print(LoH_media_growth_SD_plot)
+
+
+
+LoH_media_growth_CongoR_plot <- ggplot(LoH_media_growth, aes(y=Congo.Red, x=Condition, colour=LoH_event)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_wrap(~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('Congo Red') +
+  ylab('Growth') +
+  theme(legend.position='bottom',
+        legend.key=element_rect(size=1, color="white"),
+        legend.key.size=unit(1, "lines")) +
+  #scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="") +
+  guides(colour=FALSE)
+ggsave(ffFigFolder("Panels/LoH_media_growth_CongoR_plot.png"), plot=LoH_media_growth_CongoR_plot, bg="transparent")
+print(LoH_media_growth_CongoR_plot)
+
+
+
+LoH_media_growth_Calcoflour_plot <- ggplot(LoH_media_growth, aes(y=Calcoflour, x=Condition, colour=LoH_event)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_wrap(~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('Calcoflour White') +
+  ylab('Growth') +
+  theme(legend.position='bottom',
+        legend.key=element_rect(size=1, color="white"),
+        legend.key.size=unit(1, "lines")) +
+  #scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="") +
+  guides(colour=FALSE)
+ggsave(ffFigFolder("Panels/LoH_media_growth_Calcoflour_plot.png"), plot=LoH_media_growth_Calcoflour_plot, bg="transparent")
+print(LoH_media_growth_Calcoflour_plot)
+
+
+
+lm(RPMI ~ LoH_event * Condition, data=LoH_media_growth) %>% summary()
+lm(RPMI ~ LoH_event * Condition, data=filter(LoH_media_growth, Chromosome == 'Chromosome 1')) %>% summary()
+lm(RPMI ~ LoH_event * Condition, data=filter(LoH_media_growth, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(Spider ~ LoH_event * Condition, data=LoH_media_growth) %>% summary()
+lm(Spider ~ LoH_event * Condition, data=filter(LoH_media_growth, Chromosome == 'Chromosome 1')) %>% summary()
+lm(Spider ~ LoH_event * Condition, data=filter(LoH_media_growth, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(Lee.s ~ LoH_event * Condition, data=LoH_media_growth) %>% summary()
+lm(Lee.s ~ LoH_event * Condition, data=filter(LoH_media_growth, Chromosome == 'Chromosome 1')) %>% summary()
+lm(Lee.s ~ LoH_event * Condition, data=filter(LoH_media_growth, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(YPD ~ LoH_event * Condition, data=LoH_media_growth) %>% summary()
+lm(YPD ~ LoH_event * Condition, data=filter(LoH_media_growth, Chromosome == 'Chromosome 1')) %>% summary()
+lm(YPD ~ LoH_event * Condition, data=filter(LoH_media_growth, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(SD ~ LoH_event * Condition, data=LoH_media_growth) %>% summary()
+lm(SD ~ LoH_event * Condition, data=filter(LoH_media_growth, Chromosome == 'Chromosome 1')) %>% summary()
+lm(SD ~ LoH_event * Condition, data=filter(LoH_media_growth, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(Congo.Red ~ LoH_event * Condition, data=LoH_media_growth) %>% summary()
+lm(Congo.Red ~ LoH_event * Condition, data=filter(LoH_media_growth, Chromosome == 'Chromosome 1')) %>% summary()
+lm(Congo.Red ~ LoH_event * Condition, data=filter(LoH_media_growth, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(Calcoflour ~ LoH_event * Condition, data=LoH_media_growth) %>% summary()
+lm(Calcoflour ~ LoH_event * Condition, data=filter(LoH_media_growth, Chromosome == 'Chromosome 1')) %>% summary()
+lm(Calcoflour ~ LoH_event * Condition, data=filter(LoH_media_growth, Chromosome == 'Chromosome 4')) %>% summary()
+```
+
+
+
+## LoH events do not affect filamentation on different media affecting morphology and exerting cell wall stress
+
+
+
+- LoH derivatives spotted onto the same media as above
+- scored for filamentation
+
+
+
+```{r LoH_media_fil, echo=FALSE, message=FALSE, warning=FALSE}
+
+LoH_media_fil <- read.delim(ffDataFolder("LoH_Fil.txt"))
+LoH_media_fil <- LoH_media_fil %>% filter(LoH_event != 'Unknown')
+LoH_media_fil <- LoH_media_fil %>% mutate(Chromosome = paste0('Chromosome ', Chromosome)) 
+
+LoH_media_fil <- mutate(LoH_media_growth, LoH_event=factor(LoH_event, levels=names(colour_mappings)))
+
+
+LoH_media_fil_RPMPI_plot <- ggplot(LoH_media_fil, aes(y=RPMI, x=Condition, colour=LoH_event)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_wrap(~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('RPMI') +
+  ylab('Filamentation') +
+  theme(legend.position='bottom',
+        legend.key=element_rect(size=1, color="white"),
+        legend.key.size=unit(1, "lines")) +
+  #scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="") +
+  guides(colour=FALSE)
+ggsave(ffFigFolder("Panels/LoH_media_fil_RPMPI_plot.png"), plot=LoH_media_fil_RPMPI_plot, bg="transparent")
+print(LoH_media_fil_RPMPI_plot)
+
+
+
+(LoH_media_fil_spider_plot <- ggplot(LoH_media_fil, aes(y=Spider, x=Condition, colour=LoH_event)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_wrap(~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('Spider') +
+  ylab('Filamentation') +
+  theme(legend.position='bottom',
+        legend.key=element_rect(size=1, color="white"),
+        legend.key.size=unit(1, "lines")) +
+  #scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="") +
+  guides(colour=FALSE))
+
+ggsave(ffFigFolder("Panels/LoH_media_fil_spider_plot.png"), plot=LoH_media_fil_spider_plot, bg="transparent")
+
+
+
+LoH_media_fil_Lee_plot <- ggplot(LoH_media_fil, aes(y=Lee.s, x=Condition, colour=LoH_event)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_wrap(~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle("Lee's") +
+  ylab('Filamentation') +
+  theme(legend.position='bottom',
+        legend.key=element_rect(size=1, color="white"),
+        legend.key.size=unit(1, "lines")) +
+  #scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="") +
+  guides(colour=FALSE)
+ggsave(ffFigFolder("Panels/LoH_media_fil_Lee_plot.png"), plot=LoH_media_fil_Lee_plot, bg="transparent")
+print(LoH_media_fil_Lee_plot)
+
+
+
+LoH_media_fil_YPD_plot <- ggplot(LoH_media_fil, aes(y=YPD, x=Condition, colour=LoH_event)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_wrap(~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('YPD') +
+  ylab('Filamentation') +
+  theme(legend.position='bottom',
+        legend.key=element_rect(size=1, color="white"),
+        legend.key.size=unit(1, "lines")) +
+  #scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="") +
+  guides(colour=FALSE)
+ggsave(ffFigFolder("Panels/LoH_media_fil_YPD_plot.png"), plot=LoH_media_fil_YPD_plot, bg="transparent")
+print(LoH_media_fil_YPD_plot)
+
+
+
+LoH_media_fil_SD_plot <- ggplot(LoH_media_fil, aes(y=SD, x=Condition, colour=LoH_event)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_wrap(~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('SD') +
+  ylab('Filamentation') +
+  theme(legend.position='bottom',
+        legend.key=element_rect(size=1, color="white"),
+        legend.key.size=unit(1, "lines")) +
+  #scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="") +
+  guides(colour=FALSE)
+ggsave(ffFigFolder("Panels/LoH_media_fil_SD_plot.png"), plot=LoH_media_fil_SD_plot, bg="transparent")
+print(LoH_media_fil_SD_plot)
+
+
+
+LoH_media_fil_CongoR_plot <- ggplot(LoH_media_fil, aes(y=Congo.Red, x=Condition, colour=LoH_event)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_wrap(~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('Congo Red') +
+  ylab('Filamentation') +
+  theme(legend.position='bottom',
+        legend.key=element_rect(size=1, color="white"),
+        legend.key.size=unit(1, "lines")) +
+  #scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="") +
+  guides(colour=FALSE)
+ggsave(ffFigFolder("Panels/LoH_media_fil_CongoR_plot.png"), plot=LoH_media_fil_CongoR_plot, bg="transparent")
+print(LoH_media_fil_CongoR_plot)
+
+
+
+LoH_media_fil_Calcoflour_plot <- ggplot(LoH_media_fil, aes(y=Calcoflour, x=Condition, colour=LoH_event)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_wrap(~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('Calcoflour White') +
+  ylab('Filamentation') +
+  theme(legend.position='bottom',
+        legend.key=element_rect(size=1, color="white"),
+        legend.key.size=unit(1, "lines")) +
+  #scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="") +
+  guides(colour=FALSE)
+ggsave(ffFigFolder("Panels/LoH_media_fil_Calcoflour_plot.png"), plot=LoH_media_fil_Calcoflour_plot, bg="transparent")
+print(LoH_media_fil_Calcoflour_plot)
+
+
+
+lm(RPMI ~ LoH_event * Condition, data=LoH_media_fil) %>% summary()
+lm(RPMI ~ LoH_event * Condition, data=filter(LoH_media_fil, Chromosome == 'Chromosome 1')) %>% summary()
+lm(RPMI ~ LoH_event * Condition, data=filter(LoH_media_fil, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(Spider ~ LoH_event * Condition, data=LoH_media_fil) %>% summary()
+lm(Spider ~ LoH_event * Condition, data=filter(LoH_media_fil, Chromosome == 'Chromosome 1')) %>% summary()
+lm(Spider ~ LoH_event * Condition, data=filter(LoH_media_fil, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(Lee.s ~ LoH_event * Condition, data=LoH_media_fil) %>% summary()
+lm(Lee.s ~ LoH_event * Condition, data=filter(LoH_media_fil, Chromosome == 'Chromosome 1')) %>% summary()
+lm(Lee.s ~ LoH_event * Condition, data=filter(LoH_media_fil, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(YPD ~ LoH_event * Condition, data=LoH_media_fil) %>% summary()
+lm(YPD ~ LoH_event * Condition, data=filter(LoH_media_fil, Chromosome == 'Chromosome 1')) %>% summary()
+lm(YPD ~ LoH_event * Condition, data=filter(LoH_media_fil, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(SD ~ LoH_event * Condition, data=LoH_media_fil) %>% summary()
+lm(SD ~ LoH_event * Condition, data=filter(LoH_media_fil, Chromosome == 'Chromosome 1')) %>% summary()
+lm(SD ~ LoH_event * Condition, data=filter(LoH_media_fil, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(Congo.Red ~ LoH_event * Condition, data=LoH_media_fil) %>% summary()
+lm(Congo.Red ~ LoH_event * Condition, data=filter(LoH_media_fil, Chromosome == 'Chromosome 1')) %>% summary()
+lm(Congo.Red ~ LoH_event * Condition, data=filter(LoH_media_fil, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(Calcoflour ~ LoH_event * Condition, data=LoH_media_fil) %>% summary()
+lm(Calcoflour ~ LoH_event * Condition, data=filter(LoH_media_fil, Chromosome == 'Chromosome 1')) %>% summary()
+lm(Calcoflour ~ LoH_event * Condition, data=filter(LoH_media_fil, Chromosome == 'Chromosome 4')) %>% summary()
+```
+
+
+
+## LoH and ploidy growth (max_rate) in Hsp90 stress - Fig. 3
+
+
+
+```{r LoH_growth_fig, message=FALSE, warning=FALSE}
+#fig1c<- fig1c + theme(plot.margin=margin(1,6,1,1,'cm'))
+
+#pdf(file=paste0(FigFolder, "Figure3.pdf"),  paper='a4', width=7, height=10)
+
+# width and height in inches, making height 3.33 produces figure that is 1/3 of height but centered, can be modified and moved in AI
+
+fig3 <- LoH_max_rate_plot / LoH_max_rate_plot &   #slash = linebreak 
+  theme(legend.position = 'none') & 
+  theme(strip.text.x = element_text(size = 10, face='bold'))
+
+ggsave(ffFigFolder("Figure3.pdf"), fig3, width=7, height=10)
+# & will format all panels with whatever is specified; to format, copy comands from FormatGGplot.R incl. textsixe, angle, justified, font type etc
+
+
+```
+
+
+
+# 4. Ploidy and adaptation to Hsp90 stress, fluconazole and cell wall stressors
+
+
+
+## Ploidy and subsequent growth during Hsp90 stress conditions
+
+
+
+- LoH derivative strains were grown in triplicates at 30˚C, 39˚C, and with RAD or GdA
+- maximum growth (Vmax) and maximum growth rate (max_rate) were calculated and plotted relative to ploidy levels (x-axis) and the condition the strains initially sustained LoH events in (color)
+
+
+
+```{r ploidy_growth, message=FALSE, warning=FALSE}
+
+#ploidygrowth
+
+Ploidy_growth_LoH <- read_tsv(ffDataFolder("Ploidy2.txt")) %>%
+  dplyr::rename(strain=Colony, MutationCondition=Condition) %>%
+  mutate(Chromosome = paste0('Chr', Chromosome),
+         MutationCondition = ifelse(MutationCondition == 'RAD', 'Rad', MutationCondition)) %>%
+  full_join(Growth)
+
+(ploidy_max_rate_plot <- ggplot(Ploidy_growth_LoH, aes(y=max_rate, x=Ploidy, colour=GrowthCondition)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(Chromosome ~ MutationCondition) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  #ggtitle('LoH type and rate across the genome') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  #ylab("Vmax") +
+  #xlab("Ploidy") +
+  labs(fill=""))
+
+ggsave(ffFigFolder("Panels/ploidy_max_rate_plot.png"), bg="transparent")
+
+
+(ploidy_Vmax_plot <- ggplot(Ploidy_growth_LoH, aes(y=Vmax, x=Ploidy, colour=GrowthCondition)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(Chromosome ~ MutationCondition) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  #ggtitle('LoH type and rate across the genome') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  #ylab("Vmax") +
+  #xlab("Ploidy") +
+  labs(fill="") +
+  scale_y_continuous(limits=c(1,3)))
+
+ggsave(ffFigFolder("Panels/ploidy_Vmax_plot.png"), bg="transparent")
+
+rate1 <- lm(Vmax ~ GrowthCondition + MutationCondition, data=Ploidy_growth_LoH)
+rate2 <- lm(Vmax ~ GrowthCondition * MutationCondition, data=Ploidy_growth_LoH)
+anova(rate1, rate2)
+
+summary(rate2)
+
+max1 <- lm(max_rate ~ GrowthCondition + MutationCondition, data=Ploidy_growth_LoH)
+max2 <- lm(max_rate ~ GrowthCondition * MutationCondition, data=Ploidy_growth_LoH)
+anova(max1, max2)
+
+summary(max2)
+
+```
+
+
+
+## Ploidy and growth in Hsp90 stress - Fig. 4
+
+
+
+```{r ploidy_growth_fig, message=FALSE, warning=FALSE}
+#fig1c<- fig1c + theme(plot.margin=margin(1,6,1,1,'cm'))
+
+#pdf(file=paste0(FigFolder, "Figure4.pdf"),  paper='a4', width=7, height=10)
+
+# width and height in inches, making height 3.33 produces figure that is 1/3 of height but centered, can be modified and moved in AI
+
+fig4 <- ploidy_Vmax_plot / ploidy_max_rate_plot &   #slash = linebreak 
+  theme(legend.position = 'none') & 
+  theme(strip.text.x = element_text(size = 10, face='bold'))
+
+ggsave(ffFigFolder("Figure4.pdf"), fig4, width=7, height=10)
+# & will format all panels with whatever is specified; to format, copy comands from FormatGGplot.R incl. textsixe, angle, justified, font type etc
+
+```
+
+
+
+## Strains with reduced ploidy survive subsequent drug exposure better 
+
+
+
+- 2x96 sets of LoH derivative strains were grown in increasing doses of fluconazole (see above) and MICs plotted relative to ploidy levels (x-axis) and condition LoH events were initially sustained in (y-axis)
+- changes in ploidy as a result of Hsp90 stress (both temperature and inhibition) result in changes in drug MIC (p-value 0.0006546), increase in fluconazole MIC
+
+
+
+```{r ploidy_drug, message=FALSE, warning=FALSE}
+
+#ploidydrug
+
+Ploidy_Drug <- read.delim(ffDataFolder("Ploidy_Drug.txt"))
+Ploidy_Drug <- Ploidy_Drug %>% mutate(Chromosome = paste0('Chromosome ', Chromosome)) 
+
+#  gather("Medium", "Growth", -Chromosome, -Condition, -LoH_event, -Colony)
+# create figure, save to p1
+
+(ploidy_drug_plot <- ggplot(Ploidy_Drug, aes(y=log2(MIC), x=Ploidy, colour=Condition)) +
+  geom_jitter(size=1) +
+  facet_grid(Condition ~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  #ggtitle('RPMI') +
+  #ylab('Filamentation') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill=""))
+
+ggsave(ffFigFolder("Panels/ploidy_drug_plot.png"), plot=ploidy_drug_plot, bg="transparent")
+#print(ploidy_drug_plot)
+
+
+lm(log2(MIC) ~ Ploidy * Condition, data=Ploidy_Drug) %>% summary()
+lm(log2(MIC)  ~ Ploidy * Condition, data=filter(Ploidy_Drug, Chromosome == 'Chromosome 1')) %>% summary()
+lm(log2(MIC)  ~ Ploidy * Condition, data=filter(Ploidy_Drug, Chromosome == 'Chromosome 4')) %>% summary()
+
+
+```
+
+
+
+## LoH/ploiyd and fluconazole resistance - Fig. 4
+
+
+```{r LoH_drug_morphogenesis, message=FALSE, warning=FALSE}
+#fig1c<- fig1c + theme(plot.margin=margin(1,6,1,1,'cm'))
+
+#pdf(file=paste0(FigFolder, "Figure4.pdf"),  paper='a4', width=7, height=10)
+
+# width and height in inches, making height 3.33 produces figure that is 1/3 of height but centered, can be modified and moved in AI
+
+fig5 <- (LoH_drug_plot) /
+(ploidy_drug_plot) &
+   #theme(legend.position = 'none') &
+   theme(strip.text.x = element_text(size = 10, face='bold'))
+ggsave(ffFigFolder("Figure5.pdf"), fig5, width=7, height=10)
+# & will format all panels with whatever is specified; to format, copy comands from FormatGGplot.R incl. textsixe, angle, justified, font type etc
+
+
+```
+
+
+
+## Ploidy and growth on morphology media and cell wall stressors
+
+
+
+- 2x96 LoH derivatives were grown on different media and growth scored as above for LoH
+- growth is plotted relative to ploidy (x-axis) and growth condition in which strains were initially grown (y-axis and color)
+
+
+
+```{r ploidy_media_growth, echo=FALSE, message=FALSE, warning=FALSE}
+
+#ploidymediagrowth
+
+colour_set <- brewer.pal(12, "Pastel1")[c(1,2,3,4)]
+
+Ploidy_Media_Growth <- read.delim(ffDataFolder( "Ploidy_Media_Growth.txt"))
+Ploidy_Media_Growth <- Ploidy_Media_Growth %>% mutate(Chromosome = paste0('Chromosome ', Chromosome)) 
+
+#  gather("Medium", "Growth", -Chromosome, -Condition, -LoH_event, -Colony)
+# create figure, save to p1
+
+ploidy_media_growth_RPMI_plot <- ggplot(Ploidy_Media_Growth, aes(y=RPMI, x=Ploidy, colour=Condition)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(Condition ~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('RPMI') +
+  ylab('Growth') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="")
+
+ggsave(ffFigFolder("Panels/ploidy_media_growth_RPMI_plot.png"),
+       plot=ploidy_media_growth_RPMI_plot, bg="transparent")
+      print(ploidy_media_growth_RPMI_plot)
+
+ploidy_media_growth_spider_plot <- ggplot(Ploidy_Media_Growth, aes(y=Spider, x=Ploidy, colour=Condition)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(Condition ~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('Spider') +
+  ylab('Growth') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="")
+
+ggsave(ffFigFolder("Panels/ploidy_media_growth_spider_plot.png"),
+       plot=ploidy_media_growth_spider_plot, bg="transparent")
+print(ploidy_media_growth_spider_plot)
+
+ploidy_media_growth_Lee_plot <- ggplot(Ploidy_Media_Growth, aes(y=Lee.s, x=Ploidy, colour=Condition)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(Condition ~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle("Lee's") +
+  ylab('Growth') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="")
+
+ggsave(ffFigFolder("Panels/ploidy_media_growth_Lee_plot.png"),
+       plot=ploidy_media_growth_Lee_plot, bg="transparent")
+print(ploidy_media_growth_Lee_plot)
+      
+ploidy_media_growth_YPD_plot <- ggplot(Ploidy_Media_Growth, aes(y=YPD, x=Ploidy, colour=Condition)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(Condition ~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('YPD') +
+  ylab('Growth') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="")
+
+ggsave(ffFigFolder("Panels/ploidy_media_growth_YPD_plot.png"),
+       plot=ploidy_media_growth_YPD_plot, bg="transparent")
+print(ploidy_media_growth_YPD_plot)
+
+ploidy_media_growth_SD_plot <- ggplot(Ploidy_Media_Growth, aes(y=SD, x=Ploidy, colour=Condition)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(Condition ~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('SD') +
+  ylab('Growth') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="")
+
+ggsave(ffFigFolder("Panels/ploidy_media_growth_SD_plot.png"),
+       plot=ploidy_media_growth_SD_plot, bg="transparent")
+print(ploidy_media_growth_SD_plot)
+
+ploidy_media_growth_CongoRed_plot <- ggplot(Ploidy_Media_Growth, aes(y=Congo.Red, x=Ploidy, colour=Condition)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(Condition ~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('Congo Red') +
+  ylab('Growth') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="")
+
+ggsave(ffFigFolder("Panels/ploidy_media_growth_CongoRed_plot.png"),
+       plot=ploidy_media_growth_CongoRed_plot, bg="transparent")
+print(ploidy_media_growth_CongoRed_plot)
+
+ploidy_media_growth_Calcoflour_plot <- ggplot(Ploidy_Media_Growth, aes(y=Calcoflour, x=Ploidy, colour=Condition)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(Condition ~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('Calcofluor White') +
+  ylab('Growth') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="")
+
+ggsave(ffFigFolder("Panels/ploidy_media_growth_Calcoflour_plot.png"),
+       plot=ploidy_media_growth_Calcoflour_plot, bg="transparent")
+print(ploidy_media_growth_Calcoflour_plot)
+
+
+lm(RPMI ~ Ploidy * Condition, data=Ploidy_Media_Growth) %>% summary()
+lm(RPMI ~ Ploidy * Condition, data=filter(Ploidy_Media_Growth, Chromosome == 'Chromosome 1')) %>% summary()
+lm(RPMI ~ Ploidy * Condition, data=filter(Ploidy_Media_Growth, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(Spider ~ Ploidy * Condition, data=Ploidy_Media_Growth) %>% summary()
+lm(Spider ~ Ploidy * Condition, data=filter(Ploidy_Media_Growth, Chromosome == 'Chromosome 1')) %>% summary()
+lm(Spider ~ Ploidy * Condition, data=filter(Ploidy_Media_Growth, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(Lee.s ~ Ploidy * Condition, data=Ploidy_Media_Growth) %>% summary()
+lm(Lee.s ~ Ploidy * Condition, data=filter(Ploidy_Media_Growth, Chromosome == 'Chromosome 1')) %>% summary()
+lm(Lee.s ~ Ploidy * Condition, data=filter(Ploidy_Media_Growth, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(YPD ~ Ploidy * Condition, data=Ploidy_Media_Growth) %>% summary()
+lm(YPD ~ Ploidy * Condition, data=filter(Ploidy_Media_Growth, Chromosome == 'Chromosome 1')) %>% summary()
+lm(YPD ~ Ploidy * Condition, data=filter(Ploidy_Media_Growth, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(SD ~ Ploidy * Condition, data=Ploidy_Media_Growth) %>% summary()
+lm(SD ~ Ploidy * Condition, data=filter(Ploidy_Media_Growth, Chromosome == 'Chromosome 1')) %>% summary()
+lm(SD ~ Ploidy * Condition, data=filter(Ploidy_Media_Growth, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(Congo.Red ~ Ploidy * Condition, data=Ploidy_Media_Growth) %>% summary()
+lm(Congo.Red ~ Ploidy * Condition, data=filter(Ploidy_Media_Growth, Chromosome == 'Chromosome 1')) %>% summary()
+lm(Congo.Red ~ Ploidy * Condition, data=filter(Ploidy_Media_Growth, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(Calcoflour ~ Ploidy * Condition, data=Ploidy_Media_Growth) %>% summary()
+lm(Calcoflour ~ Ploidy * Condition, data=filter(Ploidy_Media_Growth, Chromosome == 'Chromosome 1')) %>% summary()
+lm(Calcoflour ~ Ploidy * Condition, data=filter(Ploidy_Media_Growth, Chromosome == 'Chromosome 4')) %>% summary()
+```
+
+
+
+## Ploidy and filamentation on different media
+
+
+
+- as above, colonies were scored for filamentation
+
+
+
+```{r ploidy_media_fil, echo=FALSE, message=FALSE, warning=FALSE}
+
+Ploidy_Fill<- read.delim(ffDataFolder("Ploidy_Fill.txt"))
+Ploidy_Fill <- Ploidy_Fill %>% mutate(Chromosome = paste0('Chromosome ', Chromosome),
+                                      Condition=factor(Condition, levels=names(colour_mappings))) 
+
+#  gather("Medium", "Growth", -Chromosome, -Condition, -LoH_event, -Colony)
+# create figure, save to p1
+
+ploidy_media_fil_RPMI_plot <- ggplot(Ploidy_Fill, aes(y=RPMI, x=Ploidy, colour=Condition)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(Condition ~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('RPMI') +
+  ylab('Filamentation') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  #scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="")
+
+ggsave(ffFigFolder("Panels/ploidy_media_fil_RPMI_plot.png"),
+       plot=ploidy_media_fil_RPMI_plot, bg="transparent")
+print(ploidy_media_fil_RPMI_plot)
+
+ploidy_media_fil_spider_plot <- ggplot(Ploidy_Fill, aes(y=Spider, x=Ploidy, colour=Condition)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(Condition ~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('Spider') +
+  ylab('Filamentation') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="")
+
+ggsave(ffFigFolder("Panels/ploidy_media_fil_spider_plot.png"),
+       plot=ploidy_media_fil_spider_plot, bg="transparent")
+print(ploidy_media_fil_spider_plot)
+      
+ploidy_media_fil_Lee_plot <- ggplot(Ploidy_Fill, aes(y=Lee.s, x=Ploidy, colour=Condition)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(Condition ~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle("Lee's") +
+  ylab('Filamentation') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="")
+
+ggsave(ffFigFolder("Panels/ploidy_media_fil_Lee_plot.png"),
+       plot=ploidy_media_fil_Lee_plot, bg="transparent")
+print(ploidy_media_fil_Lee_plot)
+
+ploidy_media_fil_YPD_plot <- ggplot(Ploidy_Fill, aes(y=YPD, x=Ploidy, colour=Condition)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(Condition ~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('YPD') +
+  ylab('Filamentation') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="")
+
+ggsave(ffFigFolder("Panels/ploidy_media_fil_YPD_plot.png"),
+       plot=ploidy_media_fil_YPD_plot, bg="transparent")
+print(ploidy_media_fil_YPD_plot)
+
+ploidy_media_fil_SD_plot <- ggplot(Ploidy_Fill, aes(y=SD, x=Ploidy, colour=Condition)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(Condition ~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('SD') +
+  ylab('Filamentation') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="")
+
+ggsave(ffFigFolder("Panels/ploidy_media_fil_SD_plot.png"),
+       plot=ploidy_media_fil_SD_plot, bg="transparent")
+print(ploidy_media_fil_SD_plot)
+
+ploidy_media_fil_CongoRed_plot <- ggplot(Ploidy_Fill, aes(y=Congo.Red, x=Ploidy, colour=Condition)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(Condition ~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('Congo Red') +
+  ylab('Filamentation') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="")
+
+ggsave(ffFigFolder("Panels/ploidy_media_fil_CongoRed_plot.png"),
+       plot=ploidy_media_fil_CongoRed_plot, bg="transparent")
+print(ploidy_media_fil_CongoRed_plot)
+
+ploidy_media_fil_Calcoflour_plot <- ggplot(Ploidy_Fill, aes(y=Calcoflour, x=Ploidy, colour=Condition)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(Condition ~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  ggtitle('Calcofluor White') +
+  ylab('Filamentation') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  scale_colour_manual(values=c(temp_colours[c(1,3)], inhibitor_colours)) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  labs(fill="")
+
+ggsave(ffFigFolder("Panels/ploidy_media_fil_Calcoflour_plot.png"),
+       plot=ploidy_media_fil_Calcoflour_plot, bg="transparent")
+print(ploidy_media_fil_Calcoflour_plot)
+
+
+lm(RPMI ~ Ploidy * Condition, data=Ploidy_Fill) %>% summary()
+lm(RPMI ~ Ploidy * Condition, data=filter(Ploidy_Fill, Chromosome == 'Chromosome 1')) %>% summary()
+lm(RPMI ~ Ploidy * Condition, data=filter(Ploidy_Fill, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(Spider ~ Ploidy * Condition, data=Ploidy_Fill) %>% summary()
+lm(Spider ~ Ploidy * Condition, data=filter(Ploidy_Fill, Chromosome == 'Chromosome 1')) %>% summary()
+lm(Spider ~ Ploidy * Condition, data=filter(Ploidy_Fill, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(Lee.s ~ Ploidy * Condition, data=Ploidy_Fill) %>% summary()
+lm(Lee.s ~ Ploidy * Condition, data=filter(Ploidy_Fill, Chromosome == 'Chromosome 1')) %>% summary()
+lm(Lee.s ~ Ploidy * Condition, data=filter(Ploidy_Fill, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(YPD ~ Ploidy * Condition, data=Ploidy_Fill) %>% summary()
+lm(YPD ~ Ploidy * Condition, data=filter(Ploidy_Fill, Chromosome == 'Chromosome 1')) %>% summary()
+lm(YPD ~ Ploidy * Condition, data=filter(Ploidy_Fill, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(SD ~ Ploidy * Condition, data=Ploidy_Fill) %>% summary()
+lm(SD ~ Ploidy * Condition, data=filter(Ploidy_Fill, Chromosome == 'Chromosome 1')) %>% summary()
+lm(SD ~ Ploidy * Condition, data=filter(Ploidy_Fill, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(Congo.Red ~ Ploidy * Condition, data=Ploidy_Fill) %>% summary()
+lm(Congo.Red ~ Ploidy * Condition, data=filter(Ploidy_Fill, Chromosome == 'Chromosome 1')) %>% summary()
+lm(Congo.Red ~ Ploidy * Condition, data=filter(Ploidy_Fill, Chromosome == 'Chromosome 4')) %>% summary()
+
+lm(Calcoflour ~ Ploidy * Condition, data=Ploidy_Fill) %>% summary()
+lm(Calcoflour ~ Ploidy * Condition, data=filter(Ploidy_Fill, Chromosome == 'Chromosome 1')) %>% summary()
+lm(Calcoflour ~ Ploidy * Condition, data=filter(Ploidy_Fill, Chromosome == 'Chromosome 4')) %>% summary()
+```
+
+
+
+## Ploidy and fluconazole resistance and morphogenesis - Fig. 6
+
+```{r Ploidy_drug_morphogenesis, message=FALSE, warning=FALSE}
+#fig1c<- fig1c + theme(plot.margin=margin(1,6,1,1,'cm'))
+
+#pdf(file=paste0(FigFolder, "Figure6.pdf"),  paper='a4', width=7, height=10)
+
+# width and height in inches, making height 3.33 produces figure that is 1/3 of height but centered, can be modified and moved in AI
+
+#ploidy_drug_plot  /
+fig6 <- ploidy_media_growth_Calcoflour_plot / ploidy_media_fil_Calcoflour_plot &
+   #theme(legend.position = 'none') &
+  theme(legend.position = 'none') &
+   theme(strip.text.x = element_text(size = 10, face='bold'))
+ggsave(ffFigFolder("Figure6.pdf"), fig6, width=7, height=10)
+# & will format all panels with whatever is specified; to format, copy comands from FormatGGplot.R incl. textsixe, angle, justified, font type etc
+
+
+```
+
+
+
+# 5. Do Hsp90 interactors Sti1, Tel1, Hsl1 influence LoH and ploidy and thus provide functional insights into Hsp90's role in _C. albicans_ genome integrity?
+
+
+
+## Fluctuation rates in _sti1∆/∆_, _tel1∆/∆_, and _hsl1∆/∆_ mutant strains
+
+
+
+- deleting any of the three genes in strains marked with _URA3_ on Chr1R, Chr4L, and Chr5L increases LoH rates when grown for 16 hours in YPD at 30˚C
+- co-immunoprecipitation experiments show that Hsp90 physically interacts with Hsl1 and Sti1 (which is also a co-chaperone)
+
+
+
+
+
+```{r LoH_mech_fluctuation, message=FALSE, warning=FALSE}
+
+Mechanism <- read.delim(ffDataFolder("Mechanism.txt"))
+#png(filename="~/Dropbox/! Diezmann Lab/Manuscripts/LoH_Hsp90/Figures/R_Figures/Figure_5a.png", bg="transparent", width=900, height=900, units="px")
+Mechanism$Genotype <- factor(Mechanism$Genotype, levels = names(colour_mappings))
+
+dodge <- position_dodge(width=0.6)
+(LoH_mech_fluctuation_plot <- ggplot(Mechanism, aes(y=Rate, fill=Genotype, x=Chromosome)) +
+  geom_bar(stat='identity', position=dodge, width=0.6) +
+  geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  #ggtitle('LoH rates at the MYO1 (Chr 5L) locus in different conditions') +
+  #facet_grid(. ~ Treatment) +
+  #pdf_theme() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1)) +
+  theme(legend.position='bottom') +
+  #scale_fill_manual(values=mechanism_set) +
+  #scale_fill_manual(values=hcl(c(0,90,180,270))) +
+  ylab("LoH rate/cell division") +
+  xlab("Chromosome"))
+
+ggsave(ffFigFolder("Panels/LoH_mech_fluctuation_plot.png"), bg="transparent")
+   
+
+```
+
+
+
+## LoH events in _sti1∆/∆_, _tel1∆/∆_, _hsl1∆/∆_ mutants on Chr1 and Chr4
+
+
+
+- for each mutant background 24 LoH derivatives were collected and genotyped as described above 
+
+
+
+```{r LoH_mech_genotypes, dependson='LoH_chi_square'}
+filename <- ffDataFolder("040618_SNP-RFLP mechanism_AF.xlsx")
+
+LoHMechanism_SNP_RFLP <- bind_rows(read_excel(filename, range="SNP-RFLP!C11:L36") %>% mutate(Chromosome='Chr1', Genotype='sti1/sti1'),
+                                   read_excel(filename, range="SNP-RFLP!C43:L68") %>% mutate(Chromosome='Chr1', Genotype='hsl1/hsl1'),
+                                   read_excel(filename, range="SNP-RFLP!C74:L99") %>% mutate(Chromosome='Chr4', Genotype='tel1/tel1'),
+                                  read_excel(filename, range="SNP-RFLP!C105:L130") %>% mutate(Chromosome='Chr4', Genotype='hsl1/hsl1'),
+                                   read_excel(filename, range="SNP-RFLP!C136:L161") %>% mutate(Chromosome='Chr4', Genotype='sti1/sti1'),
+                                   read_excel(filename, range="SNP-RFLP!C168:L193") %>% mutate(Chromosome='Chr1', Genotype='tel1/tel1')
+) %>%
+  dplyr::rename(strain=`Colony #`) %>%
+  filter(`LoH type` != '/') %>%
+  mutate(LoH_event=case_when(str_detect(`LoH type`, 'whole Chr') ~ 'Whole Chromosome',
+                             str_detect(`LoH type`, 'short') | `LoH type` == 'GC+BIR' ~ 'Short',
+                             str_detect(`LoH type`, 'long') ~ 'Long',
+                             TRUE ~ 'Unknown')
+         ) %>%
+  dplyr::select(strain, Chromosome, Genotype, LoH_event)
+
+
+LoHMechanism_SNP_RFLP <- expanded %>% filter(Treatment == '30C') %>%
+  mutate(Genotype = 'WT', strain=NA, Chromosome=str_replace(Locus, 'omosome ', '')) %>%
+  dplyr::select(strain, Chromosome, Genotype, LoH_event) %>%
+  bind_rows(LoHMechanism_SNP_RFLP) %>%
+  mutate(Genotype = factor(Genotype, levels=names(colour_mappings)),
+         LoH_event = factor(LoH_event, levels=names(colour_mappings)))
+  
+  
+  
+(LoH_mech_genotypes_plot <- ggplot(LoHMechanism_SNP_RFLP, aes(x=Genotype, fill=LoH_event)) +
+  geom_bar(width=0.6) +
+  facet_grid(~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  #ggtitle('LoH type and rate across the genome') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  #scale_fill_manual(values=mutation_set) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  ylab("Count") +
+  xlab("Condition") +
+  labs(fill=""))
+
+ggsave(ffFigFolder("Panels/LoH_mech_genotypes_plot.png"), bg="transparent")
+
+both <- LoHMechanism_SNP_RFLP %>% dplyr::select(-strain, -Chromosome) %>%
+  mutate(Genotype=as.character(Genotype), LoH_event=as.character(LoH_event))
+chr1 <- filter(LoHMechanism_SNP_RFLP, Chromosome == 'Chr1') %>% 
+  dplyr::select(-strain, -Chromosome) %>% 
+  mutate(Genotype=as.character(Genotype), LoH_event=as.character(LoH_event))
+chr4 <- filter(LoHMechanism_SNP_RFLP, Chromosome == 'Chr4') %>% 
+  dplyr::select(-strain, -Chromosome) %>% 
+  mutate(Genotype=as.character(Genotype), LoH_event=as.character(LoH_event))
+tibble(Locus=c('chr1', 'chr4', 'both'), 
+     `hsl1/hsl1`=c(fisher.test(table(filter(chr1, Genotype == 'WT' | Genotype == 'hsl1/hsl1')))$p.value,
+                   fisher.test(table(filter(chr4, Genotype == 'WT' | Genotype == 'hsl1/hsl1')))$p.value,
+                   fisher.test(table(filter(both, Genotype == 'WT' | Genotype == 'hsl1/hsl1')))$p.value),
+     `sti1/sti1`=c(fisher.test(table(filter(chr1, Genotype == 'WT' | Genotype == 'sti1/sti1')))$p.value,
+                   fisher.test(table(filter(chr4, Genotype == 'WT' | Genotype == 'sti1/sti1')))$p.value,
+                   fisher.test(table(filter(both, Genotype == 'WT' | Genotype == 'sti1/sti1')))$p.value),
+     `tel1/tel1`=c(fisher.test(table(filter(chr1, Genotype == 'WT' | Genotype == 'tel1/tel1')))$p.value,
+                   fisher.test(table(filter(chr4, Genotype == 'WT' | Genotype == 'tel1/tel1')))$p.value, 
+                   fisher.test(table(filter(both, Genotype == 'WT' | Genotype == 'tel1/tel1')))$p.value))
+
+#lohmechevents
+
+```
+
+
+
+## Ploidy is significantly reduced in derivatives of _sti1∆/∆_
+
+
+
+- ploidy levels were determined for 2x24 derivatives in the _sti1∆/∆_ and _tel1∆/∆_ backgrounds
+- ploidy changes significantly in the _sti1∆/∆_ mutant in keeping with its role in chromosome stability
+
+
+
+```{r LoH_mech_ploidy, echo=FALSE, message=FALSE, warning=FALSE}
+Ploidy <- read.delim(ffDataFolder("Ploidy2.txt"))
+
+Ploidy <- Ploidy %>% mutate(Chromosome = paste0('Chr', Chromosome),
+                            Genotype='WT') %>%
+  filter(Condition == '30C') %>%
+  dplyr::rename(strain=Colony) %>%
+  dplyr::select(-Condition)
+
+LoH_ploidy <- read_excel(ffDataFolder("Tidy Data Mech.xlsx"), sheet = "Ploidy") %>%
+  mutate(Strain=ifelse(str_detect(Strain, 'sti1'), 'sti1/sti1', 'tel1/tel1'),
+         Chromosome = paste0("Chr", Chromosome)) %>%
+  dplyr::rename(Genotype=Strain, strain=Colony) %>%
+  bind_rows(Ploidy) %>%
+  mutate(Genotype = factor(factor(Genotype), levels=names(colour_mappings))) 
+
+(LoH_mech_ploidy_plot <- LoH_ploidy %>% ggplot(aes(y=Ploidy, x=Genotype, colour=Genotype)) +
+  geom_jitter(width=.2, size=1) +
+  facet_grid(~ Chromosome) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  #ggtitle('LoH type and rate across the genome') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  #scale_colour_manual(values=mechanism_set[c(1,3,4)]) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  ylab("Ploidy") +
+  xlab("Condition") +
+  labs(fill=""))
+
+ggsave(ffFigFolder("Panels/LoH_mech_ploidy.png"), bg="transparent")
+
+lm(Ploidy ~ Genotype, data=LoH_ploidy) %>% summary()
+lm(Ploidy ~ Genotype, data=filter(LoH_ploidy, Chromosome == 'Chr1')) %>% summary()
+lm(Ploidy ~ Genotype, data=filter(LoH_ploidy, Chromosome == 'Chr4')) %>% summary()
+
+#lohmechploidy
+
+```
+
+
+
+## Growth parameters (max_rate and max growth (Vmax)) in _sti1∆/∆_ and _tel1∆/∆_ mutants
+
+
+
+- LoH derivatives of the _sti1∆/∆_ and _tel1∆/∆_ backgrounds whose progenitors carried _URA3_ on Chr1 and Chr4 were grown in previously described Hsp90 stress conditions
+- to highlight the role of different LoH events (color) and ploidy (x-axis) on max_rate and Vmax, plots were done accordingly
+
+
+
+```{r LoH_mech_growth, dependson='LoH_mech_genotypes'}
+
+#lohmechgrowth
+
+filename <- ffDataFolder("Growth Curves.xlsx")
+platemap1 <- "290916 plate map!C6:N14"
+platemap2 <- "071016 plate map!C6:N14"
+platemap3 <- "151016 plate map!C6:N14"
+LoHMechanism_growth_curves <- bind_rows(
+  CalculateGrowthLoH(filename, platemap1, "290916!B7:CU103") %>%
+    mutate(GrowthCondition='30C'),
+  CalculateGrowthLoH(filename, platemap1, "300916!B7:CU103") %>%
+    mutate(GrowthCondition='39C'),
+  CalculateGrowthLoH(filename, platemap1, "011016!B7:CU103") %>%
+    mutate(GrowthCondition='GdA'),
+  CalculateGrowthLoH(filename, platemap1, "031016!B7:CU103") %>%
+    mutate(GrowthCondition='Rad'),
+  CalculateGrowthLoH(filename, platemap1, "061016!B7:CU103") %>%
+    mutate(GrowthCondition='Flu'),
+  CalculateGrowthLoH(filename, platemap2, "071016!B7:CU103") %>%
+    mutate(GrowthCondition='30C'),
+  CalculateGrowthLoH(filename, platemap2, "081016!B7:CU103") %>%
+    mutate(GrowthCondition='39C'),
+  CalculateGrowthLoH(filename, platemap2, "121016!B7:CU103") %>%
+    mutate(GrowthCondition='GdA'),
+  CalculateGrowthLoH(filename, platemap2, "131016!B7:CU103") %>%
+    mutate(GrowthCondition='Rad'),
+  CalculateGrowthLoH(filename, platemap2, "141016!B7:CU103") %>%
+    mutate(GrowthCondition='Flu'),
+  CalculateGrowthLoH(filename, platemap3, "151016!B7:CU103") %>%
+    mutate(GrowthCondition='30C'),
+  CalculateGrowthLoH(filename, platemap3, "191016!B7:CU103") %>%
+    mutate(GrowthCondition='39C'),
+  CalculateGrowthLoH(filename, platemap3, "201016!B7:CU103") %>%
+    mutate(GrowthCondition='GdA'),
+  CalculateGrowthLoH(filename, platemap3, "211016!B7:CU103") %>%
+    mutate(GrowthCondition='Rad'),
+  CalculateGrowthLoH(filename, platemap3, "251016!B7:CU103") %>%
+    mutate(GrowthCondition='Flu')
+)
+
+
+LoH_ploidy <- read_excel(ffDataFolder("Tidy Data Mech.xlsx"), sheet = "Ploidy") %>%
+  mutate(Strain=ifelse(str_detect(Strain, 'sti1'), 'sti1/sti1', 'tel1/tel1'),
+         Chromosome = paste0("Chr", Chromosome)) %>%
+  dplyr::rename(Genotype=Strain, strain=Colony)
+
+LoHMechanism_growth_curves <- LoHMechanism_growth_curves %>% separate(Genotype, c('Chromosome', 'Genotype'), sep='_') %>%
+  full_join(LoH_ploidy)
+
+
+LoHMechanism_growth_curves <- LoHMechanism_growth_curves %>% full_join(LoHMechanism_SNP_RFLP)
+
+write_tsv(LoHMechanism_growth_curves, ffDataFolder("LoHMechanism_Growth_Parameters"))
+
+LoHMechanism_growth_curves <- filter(LoHMechanism_growth_curves, GrowthCondition != 'Flu' & LoH_event != 'complex') %>%
+  mutate(GrowthCondition = factor(ifelse(GrowthCondition=='Rad', 'RAD', GrowthCondition), levels=names(colour_mappings)),
+         LoH_event = factor(LoH_event, levels=names(colour_mappings)))
+
+#LoHMechanism_growth_curves <- 
+LoHMechanism_growth_curves <-  LoH_growth %>% filter(MutationCondition=="30C") %>%
+    full_join(Ploidy_growth_LoH %>% filter(MutationCondition=="30C")) %>%
+    mutate(Genotype='WT') %>%
+    dplyr::select(-MutationCondition) %>%
+    bind_rows(LoHMechanism_growth_curves) %>% 
+    mutate(GrowthCondition=ifelse(GrowthCondition=='Rad', 'RAD', GrowthCondition)) %>% 
+    SetColours(GrowthCondition) %>%
+    SetColours(Genotype)
+
+
+(LoH_mech_Vmax_LoH_plot <- LoHMechanism_growth_curves  %>% filter(!is.na(LoH_event)) %>%
+  ggplot(aes(y=Vmax, x=GrowthCondition, colour=LoH_event)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(Chromosome ~ Genotype) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  #ggtitle('LoH type and rate across the genome') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  #scale_colour_manual(values=mutation_set) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  ylab("Vmax") +
+  #xlab("Genotype") +
+  labs(fill="") +
+  scale_y_continuous(limits=c(0,3)))
+
+ggsave(ffFigFolder("Panels/LoH_mech_Vmax_LoH_plot.png"), bg="transparent")
+
+
+
+(LoH_mech_maxrate_LoH_plot <- LoHMechanism_growth_curves  %>% filter(!is.na(LoH_event)) %>%
+  ggplot(aes(y=max_rate, x=GrowthCondition, colour=LoH_event)) +
+  geom_jitter(width=.2, size=.5) +
+  facet_grid(Chromosome ~ Genotype) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  #ggtitle('LoH type and rate across the genome') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  #scale_colour_manual(values=mutation_set) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  #xlab("Genotype") +
+  labs(fill=""))
+
+ggsave(ffFigFolder("Panels/LoH_mech_maxrate_LoH_plot.png"), bg="transparent")
+
+
+(LoH_mech_Vmax_ploidy_plot <- LoHMechanism_growth_curves %>%
+    ggplot(aes(y=Vmax, x=Ploidy, colour=GrowthCondition)) +
+      geom_point(size=.5) +
+      facet_grid(Chromosome ~ Genotype) +
+      #pdf_theme() +
+      theme(legend.position='bottom', 
+            legend.key=element_rect(size=1, color="white"), 
+            legend.key.size=unit(1, "lines")) +
+      guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+      labs(fill="") +
+      scale_y_continuous(limits=c(0,3))
+  )
+
+ggsave(ffFigFolder("Panels/LoH_mech_Vmax_ploidy_plot.png"), bg="transparent")
+
+(LoH_mech_maxrate_ploidy_plot <- ggplot(LoHMechanism_growth_curves, aes(y=max_rate, x=Ploidy, colour=GrowthCondition)) +
+  geom_point(size=.5) +
+  facet_grid(Chromosome ~ Genotype) +
+  #pdf_theme() +
+  #geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  #ggtitle('LoH type and rate across the genome') +
+theme(legend.position='bottom', legend.key=element_rect(size=1, color="white"), legend.key.size=unit(1, "lines")) +
+  #scale_colour_manual(values=mutation_set) +
+  guides(fill=guide_legend(nrow=2,byrow=TRUE)) +
+  #ylab("Vmax") +
+  #xlab("Ploidy") +
+  labs(fill=""))
+
+ggsave(ffFigFolder("Panels/LoH_mech_maxrate_ploidy_plot.png"), bg="transparent")
+
+```
+
+- Ploidy, Genotype, LoH_event and GrowthCondition all influence max_rate, but the only interaction that significantly adds to model fit is between Ploidy and LoH_event (that's what the first anova test is for)
+    - mutants have lower max_rate than WT
+    - max_rate is lower at 39 deg and with GdA (RAD is non-sig)
+    - whole chr strains have equally low max_rate regardless of ploidy (Ploidy:LoH_eventWhole Chromosome is significant and the coefficient is almost the same size as the Polidy coefficient, but in the opposite direction)
+    - ploidy is only sig for chr4 (whole chr main effect is sig for chr1)
+    - GdA is only sig for chr4
+    - short grow significantly better for chr4
+    - tel1 only sig for chr1
+
+- For Vmax, the three-way interaction between genotype, LoH_event and GrowthCondition is significant
+    - the only significant coefficient is Genotypesti1/sti1:LoH_eventWhole Chromosome:GrowthCondition39C, meaning that Whole Chr sti1 mutatants have lower Vmax when grown at 39 deg
+    - sti1, 39 deg and whole chr are all significant when analysed without interactions, but not when they are included
+    - Ploidy is non-significant for Vmax, either when analysed alone or in combination with other factors (with or without interactions)
+    
+
+```{r }
+# Test if interaction between LoH and Ploidy significantly improves fit of model
+anova(lm(max_rate ~ Ploidy + Genotype + LoH_event + GrowthCondition, data=filter(LoHMechanism_growth_curves, !is.na(LoH_event))),
+      lm(max_rate ~ Ploidy + Genotype + LoH_event + GrowthCondition + Ploidy:LoH_event, data=filter(LoHMechanism_growth_curves, !is.na(LoH_event))))
+
+#lm(max_rate ~ Ploidy + Genotype + LoH_event + GrowthCondition + Ploidy:LoH_event, data=LoHMechanism_growth_curves) %>% summary()
+
+#getting rid off the interaction by deleting something
+lm(max_rate ~ Ploidy + Genotype + LoH_event + GrowthCondition, data=LoHMechanism_growth_curves) %>% summary()
+
+
+anova(lm(max_rate ~ Ploidy + Genotype + LoH_event + GrowthCondition + Ploidy:LoH_event, data=filter(LoHMechanism_growth_curves, Chromosome == 'Chr1')),
+      lm(max_rate ~ Genotype + LoH_event + GrowthCondition, data=filter(LoHMechanism_growth_curves, Chromosome == 'Chr1')))
+
+lm(max_rate ~ Genotype + LoH_event + GrowthCondition, data=filter(LoHMechanism_growth_curves, Chromosome == 'Chr1')) %>% summary()
+
+anova(lm(max_rate ~ Ploidy + Genotype + LoH_event + GrowthCondition + Ploidy:LoH_event, data=filter(LoHMechanism_growth_curves, Chromosome == 'Chr4')),
+      lm(max_rate ~ Ploidy + Genotype + LoH_event + GrowthCondition, data=filter(LoHMechanism_growth_curves, Chromosome == 'Chr4')))
+
+lm(max_rate ~ Ploidy + Genotype + LoH_event + GrowthCondition + Ploidy:LoH_event, data=filter(LoHMechanism_growth_curves, Chromosome == 'Chr4')) %>% summary()
+
+
+anova(lm(Vmax ~ Ploidy + Genotype * LoH_event * GrowthCondition, data=LoHMechanism_growth_curves),
+      lm(Vmax ~ Genotype * LoH_event * GrowthCondition, data=LoHMechanism_growth_curves))
+
+anova(lm(Vmax ~ Genotype * LoH_event * GrowthCondition, data=LoHMechanism_growth_curves),
+      lm(Vmax ~ Genotype + LoH_event + GrowthCondition, data=LoHMechanism_growth_curves))
+
+lm(Vmax ~ Genotype * LoH_event * GrowthCondition, data=LoHMechanism_growth_curves) %>% summary()
+
+```
+
+## LoH mechamisms, fluctuation assays, genotypes, ploidies - Fig. 7
+
+
+```{r LoH_mech_fig, message=FALSE, warning=FALSE}
+#fig1c<- fig1c + theme(plot.margin=margin(1,6,1,1,'cm'))
+
+#pdf(file=paste0(FigFolder, "Figure7.pdf"),  paper='a4', width=7, height=10)
+
+# width and height in inches, making height 3.33 produces figure that is 1/3 of height but centered, can be modified and moved in AI
+
+fig7 <- LoH_mech_fluctuation_plot  /
+LoH_mech_genotypes_plot / LoH_mech_ploidy_plot &
+   #theme(legend.position = 'none') &
+  theme(legend.position = 'none') &
+   theme(strip.text.x = element_text(size = 10, face='bold'))
+
+ggsave(ffFigFolder("Figure7.pdf"),  fig7, width=7, height=10)
+
+# & will format all panels with whatever is specified; to format, copy comands from FormatGGplot.R incl. textsixe, angle, justified, font type etc
+
+```
+
+
+
+
+## Fitness of _sti1∆/∆_ and _tel1∆/∆_ derived LoH strains - Fig. 8
+
+
+```{r LoH_mech_growth_fig, message=FALSE, warning=FALSE}
+#fig1c<- fig1c + theme(plot.margin=margin(1,6,1,1,'cm'))
+
+#pdf(file=paste0(FigFolder, "Figure8.pdf"),  paper='a4', width=7, height=10)
+
+# width and height in inches, making height 3.33 produces figure that is 1/3 of height but centered, can be modified and moved in AI
+
+fig8 <- LoH_mech_maxrate_LoH_plot  / LoH_mech_maxrate_ploidy_plot &
+   #theme(legend.position = 'none') &
+  theme(legend.position = 'none') &
+   theme(strip.text.x = element_text(size = 10, face='bold'))
+ggsave(ffFigFolder("Figure8.pdf"),  fig8, width=7, height=10)
+
+# & will format all panels with whatever is specified; to format, copy comands from FormatGGplot.R incl. textsixe, angle, justified, font type etc
+
+
+```
+
+
+# Supplemental Figures
+
+
+## Genome-wide LoH rates in response to Hsp90 inhibition and increased temperatures - Fig.S3
+
+
+```{r LoH_genome, message=FALSE, warning=FALSE}
+Loci <- read.delim(ffDataFolder("Locus.txt")) %>%
+  mutate(Treatment=str_replace(Treatment, '.C', 'C'))
+dodge <- position_dodge(width=0.6)
+#png(filename="~/Dropbox/! Diezmann Lab/Manuscripts/LoH_Hsp90/Figures/R_Figures/FigureS3.png", bg="transparent", width=900, height=900, units="px")
+Loci$Locus <- factor(Loci$Locus, levels = unique(Loci$Locus))
+(LoH_genome <- ggplot(Loci, aes(y=Rate, x=Treatment, fill=Treatment)) +
+  geom_bar(stat='identity', position=dodge, width=0.6) +
+  geom_errorbar(aes(ymax=Rate+CI, ymin=Rate-CI), position=dodge, width=0.25) +
+  #ggtitle('LoH rates at the MYO1 (Chr 5L) locus in different conditions') +
+  facet_grid(. ~ Locus) +
+  #pdf_theme() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank()) +
+  theme(legend.position='bottom') +
+  scale_fill_manual(values=c(temp_colours, inhibitor_colours)) +
+  #scale_y_continuous(expand=expand_scale(c(0, .05),0), limits=) +
+  #scale_fill_manual(values=brewer.pal(12, "PiYG")[c(8,1,2,9,10)]) +
+  ylab("LoH rate/cell division") +
+  xlab(""))
+
+ggsave(ffFigFolder("FigureS3.pdf"),  width=7, height=5)
+
+LoH_genome
+
+```
+
+
+## LoH and ploidy growth (Vmax) in Hsp90 stress - Fig. S4
+
+
+
+```{r LoH_growth_fig, message=FALSE, warning=FALSE}
+#fig1c<- fig1c + theme(plot.margin=margin(1,6,1,1,'cm'))
+
+#pdf(file=paste0(FigFolder, "FigureS4.pdf"),  paper='a4', width=7, height=10)
+
+# width and height in inches, making height 3.33 produces figure that is 1/3 of height but centered, can be modified and moved in AI
+
+figS4 <- LoH_Vmax_plot / ploidy_Vmax_plot &   #slash = linebreak 
+  theme(legend.position = 'none') & 
+  theme(strip.text.x = element_text(size = 10, face='bold'))
+ggsave(ffFigFolder("FigureS4.pdf"), figS4, width=7, height=10)
+
+# & will format all panels with whatever is specified; to format, copy comands from FormatGGplot.R incl. textsixe, angle, justified, font type etc
+
+```
+
+
+
+## LoH and growth on different morphology and cell wall stress media - Fig.S5
+
+
+```{r LoH_media_growth_all, message=FALSE, warning=FALSE}
+#fig1c<- fig1c + theme(plot.margin=margin(1,6,1,1,'cm'))
+
+#pdf(file=paste0(FigFolder, "FigureS5.pdf"),  paper='a4', width=7, height=10, pagecentre=TRUE)
+
+# width and height in inches, making height 3.33 produces figure that is 1/3 of height but centered, can be modified and moved in AI
+
+figS5 <- (LoH_media_growth_YPD_plot + theme(legend.position = 'none') | LoH_media_growth_SD_plot + theme(legend.position = 'none')) /
+(LoH_media_growth_Calcoflour_plot + theme(legend.position = 'none') | LoH_media_growth_CongoR_plot + theme(legend.position = 'none')) /
+(LoH_media_growth_RPMI_plot + theme(legend.position = 'none') | LoH_media_growth_spider_plot + theme(legend.position = 'none')) /
+(LoH_media_growth_Lee_plot + theme(legend.position = 'none') |  LoH_media_growth_Lee_plot + theme(legend.position = 'none')) & 
+theme(strip.text.x = element_text(size = 10, face='bold'),
+        plot.title=element_blank()) 
+
+ggsave(ffFigFolder("FigureS5.pdf"), figS5, width=7, height=10)
+# & will format all panels with whatever is specified; to format, copy comands from FormatGGplot.R incl. textsixe, angle, justified, font type etc
+
+
+```
+
+
+
+## LoH and filamentation on different morphology and cell wall stress media - Fig.S6
+
+
+```{r LoH_media_fil_all, message=FALSE, warning=FALSE}
+#fig1c<- fig1c + theme(plot.margin=margin(1,6,1,1,'cm'))
+
+#pdf(file=paste0(FigFolder, "FigureS6.pdf"),  paper='a4', width=7, height=10, pagecentre=TRUE)
+
+# width and height in inches, making height 3.33 produces figure that is 1/3 of height but centered, can be modified and moved in AI
+
+#slash = linebreak
+
+figS6 <- (LoH_media_fil_YPD_plot + theme(legend.position = 'none') | LoH_media_fil_SD_plot + theme(legend.position = 'none')) / 
+(LoH_media_fil_Calcoflour_plot + theme(legend.position = 'none') | LoH_media_fil_CongoR_plot + theme(legend.position = 'none')) /
+(LoH_media_fil_RPMPI_plot + theme(legend.position = 'none') | LoH_media_fil_spider_plot + theme(legend.position = 'none')) /
+(LoH_media_fil_Lee_plot + theme(legend.position = 'none') | LoH_media_fil_Lee_plot + theme(legend.position = 'none')) & 
+  theme(strip.text.x = element_text(size = 10, face='bold'),
+        plot.title=element_blank()) 
+
+ggsave(ffFigFolder("FigureS6.pdf"), figS6, width=7, height=10)
+
+# & will format all panels with whatever is specified; to format, copy comands from FormatGGplot.R incl. textsixe, angle, justified, font type etc
+
+
+```
+
+
+
+## Ploidy and growth on different morphology and cell wall stress media - Fig.S7
+
+
+```{r ploidy_media_growth_all, message=FALSE, warning=FALSE}
+#fig1c<- fig1c + theme(plot.margin=margin(1,6,1,1,'cm'))
+
+#pdf(file=paste0(FigFolder, "FigureS7.pdf"),  paper='a4', width=7, height=10, pagecentre=TRUE)
+
+# width and height in inches, making height 3.33 produces figure that is 1/3 of height but centered, can be modified and moved in AI
+
+#Calcoflour in Fig.6
+
+figS7 <- (ploidy_media_growth_YPD_plot + scale_y_continuous(breaks=c(0, 2,4), limits=c(0, NA)) + theme(legend.position = 'none') | ploidy_media_growth_SD_plot + scale_y_continuous(breaks=c(0, 2,4), limits=c(0, NA)) + theme(legend.position = 'none')) / #slash = linebreak
+(ploidy_media_growth_Calcoflour_plot + scale_y_continuous(breaks=c(0, 2,4), limits=c(0, NA)) + theme(legend.position = 'none') | ploidy_media_growth_CongoRed_plot + scale_y_continuous(breaks=c(0, 2,4), limits=c(0, NA)) + theme(legend.position = 'none')) /
+(ploidy_media_growth_RPMI_plot + scale_y_continuous(breaks=c(0, 3), limits=c(0, NA)) + theme(legend.position = 'none') | ploidy_media_growth_spider_plot + scale_y_continuous(breaks=c(0, 2,4), limits=c(0, NA)) + theme(legend.position = 'none')) /
+
+  (ploidy_media_growth_Lee_plot + scale_y_continuous(breaks=c(0, 2,4), limits=c(0, NA)) + theme(legend.position = 'none') | ploidy_media_growth_Lee_plot + scale_y_continuous(breaks=c(0, 2,4), limits=c(0, NA)) + theme(legend.position = 'none')) & 
+ theme(strip.text.x = element_text(size = 10, face='bold'),
+        strip.text.y = element_text(size = 10, face='bold', angle=0),
+        plot.title=element_blank()) 
+
+ggsave(ffFigFolder("FigureS7.pdf"), figS7, width=7, height=10)
+
+# & will format all panels with whatever is specified; to format, copy comands from FormatGGplot.R incl. textsixe, angle, justified, font type etc
+
+
+```
+
+
+
+## Ploidy and filamentation on different morphology and cell wall stress media - Fig.S8
+
+
+```{r Ploidy_media_fil_all, message=FALSE, warning=FALSE}
+#fig1c<- fig1c + theme(plot.margin=margin(1,6,1,1,'cm'))
+
+#pdf(file=paste0(FigFolder, "FigureS8.pdf"),  paper='a4', width=7, height=10, pagecentre=TRUE)
+
+# width and height in inches, making height 3.33 produces figure that is 1/3 of height but centered, can be modified and moved in AI
+
+figS8 <- (ploidy_media_fil_YPD_plot +
+  scale_y_continuous(breaks=c(0, 2,4), limits=c(0, NA)) + theme(legend.position = 'none') | ploidy_media_fil_SD_plot + scale_y_continuous(breaks=c(0, 2,4), limits=c(0, NA)) + theme(legend.position = 'none')) / 
+(ploidy_media_fil_Calcoflour_plot + scale_y_continuous(breaks=c(0, 2,4), limits=c(0, NA)) + theme(legend.position = 'none') | ploidy_media_fil_CongoRed_plot + scale_y_continuous(breaks=c(0, 2,4), limits=c(0, NA)) + theme(legend.position = 'none')) /
+(ploidy_media_fil_RPMI_plot + scale_y_continuous(breaks=c(0, 3), limits=c(0, NA)) + theme(legend.position = 'none') | ploidy_media_fil_spider_plot + scale_y_continuous(breaks=c(0, 3), limits=c(0, NA)) + theme(legend.position = 'none')) /
+
+  (ploidy_media_fil_Lee_plot + scale_y_continuous(breaks=c(0, 2,4), limits=c(0, NA)) + theme(legend.position = 'none') | ploidy_media_fil_Lee_plot + scale_y_continuous(breaks=c(0, 2,4), limits=c(0, NA)) + theme(legend.position = 'none')) & theme(strip.text.x = element_text(size = 10, face='bold'),
+        strip.text.y = element_text(size = 10, face='bold', angle=0),
+        plot.title=element_blank()) 
+
+ggsave(ffFigFolder("FigureS8.pdf"), figS8, width=7, height=10)
+
+# & will format all panels with whatever is specified; to format, copy comands from FormatGGplot.R incl. textsixe, angle, justified, font type etc
+
+
+```
+
+
+## Fitness (Vmax) of _sti1∆/∆_ and _tel1∆/∆_ derived LoH strains - Fig. S9
+
+
+```{r LoH_mech_growth_fig, message=FALSE, warning=FALSE}
+#fig1c<- fig1c + theme(plot.margin=margin(1,6,1,1,'cm'))
+
+#pdf(file=paste0(FigFolder, "FigureS9.pdf"),  paper='a4', width=7, height=10)
+
+# width and height in inches, making height 3.33 produces figure that is 1/3 of height but centered, can be modified and moved in AI
+
+figS9 <- LoH_mech_Vmax_LoH_plot  / LoH_mech_Vmax_ploidy_plot &
+   #theme(legend.position = 'none') &
+  theme(legend.position = 'none') &
+   theme(strip.text.x = element_text(size = 10, face='bold'))
+
+ggsave(ffFigFolder("FigureS9.pdf"), figS9, width=7, height=10)
+
+# & will format all panels with whatever is specified; to format, copy comands from FormatGGplot.R incl. textsixe, angle, justified, font type etc
+
+
+```
