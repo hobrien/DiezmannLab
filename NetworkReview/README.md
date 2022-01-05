@@ -1,1 +1,1 @@
-# R code used to generate Fig. 3 of Crunden JL and S Diezmann. 2021. [Hsp90 interaction networks in fungi—tools and techniques.](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8599792/) FEMS Yeast Research 21: foab054
+R code used to generate Fig. 3 of Crunden JL and S Diezmann. 2021. [Hsp90 interaction networks in fungi—tools and techniques.](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC8599792/) FEMS Yeast Research 21: foab054
